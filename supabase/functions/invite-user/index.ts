@@ -1,5 +1,5 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
-import { validateInvitation, zonesForRole } from '../_shared/invitation.mjs';
+import { validateInvitation, zonesForRole, zonesFromLots } from '../_shared/invitation.mjs';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -61,15 +61,20 @@ Deno.serve(async request => {
     return respond(403, { message: 'Solo una cuenta administradora activa puede invitar usuarios.' });
   }
 
-  const { data: zones, error: zonesError } = await adminClient.from('field_zones').select('zone');
-  if (zonesError) {
-    console.error('No se pudieron comprobar las zonas permitidas.', zonesError);
-    return respond(500, { message: 'No se pudieron verificar las zonas configuradas.' });
+  const lots: Array<{ zone: string }> = [];
+  for (let offset = 0; ; offset += 1000) {
+    const result = await adminClient.from('field_lots').select('zone').order('zone').range(offset, offset + 999);
+    if (result.error) {
+      console.error('No se pudieron comprobar las zonas permitidas.', result.error);
+      return respond(500, { message: 'No se pudieron verificar las zonas configuradas.' });
+    }
+    const page: Array<{ zone: string }> = result.data || [];
+    lots.push(...page);
+    if (page.length < 1000) break;
   }
-  const allZones = (zones || []).map(item => item.zone);
   let allowedZones: string[];
   try {
-    allowedZones = zonesForRole(invitation.role, invitation.allowed_zones, allZones);
+    allowedZones = zonesForRole(invitation.role, invitation.allowed_zones, zonesFromLots(lots));
   } catch (error) {
     return respond(400, { message: error instanceof Error ? error.message : 'La selección de zonas no es válida.' });
   }

@@ -2,6 +2,7 @@ const DB_NAME = 'mym-campo-local';
 const DB_VERSION = 2;
 const SESSION_KEY = 'mym-campo-auth-session';
 const PROFILE_KEY = 'mym-campo-auth-profile';
+const INVITE_PENDING_KEY = 'mym-campo-invite-pending';
 const ROLE_OPTIONS = ['aereo', 'terrestre', 'supervisor', 'admin'];
 const modules = {
   clima: { title: 'Clima', subtitle: 'Ubicación y lecturas de las condiciones de campo.', icon: '☀', group: 'aereo', roles: ['aereo'] },
@@ -200,7 +201,7 @@ const childSchemas = {
 };
 const $ = (selector, root) => (root || document).querySelector(selector);
 const $$ = (selector, root) => [...(root || document).querySelectorAll(selector)];
-const state = { db: null, user: null, authSession: null, configured: false, syncConnected: false, syncBusy: false, refreshPromise: null, currentModule: null, recordTimeTimer: null, lotLookup: Object.create(null) };
+const state = { db: null, user: null, authSession: null, configured: false, syncConnected: false, syncBusy: false, refreshPromise: null, currentModule: null, recordTimeTimer: null, lotLookup: Object.create(null), acceptingInvite: false };
 
 async function loadLotLookup() {
   try {
@@ -403,15 +404,36 @@ function authMessage(id, message) {
   node.textContent = message;
   node.hidden = !message;
 }
+function isActiveAdmin() {
+  return !!state.user && state.user.status === 'active' && state.user.role === 'admin';
+}
+function consumeInviteLink() {
+  const fragment = new URLSearchParams(location.hash.slice(1));
+  const accessToken = fragment.get('access_token');
+  if (fragment.get('type') !== 'invite' || !accessToken) return false;
+  const expiresIn = Number(fragment.get('expires_in')) || 3600;
+  saveAuthSession({
+    access_token: accessToken,
+    refresh_token: fragment.get('refresh_token'),
+    token_type: fragment.get('token_type') || 'bearer',
+    expires_at: Math.floor(Date.now() / 1000) + expiresIn
+  });
+  state.acceptingInvite = true;
+  localStorage.setItem(INVITE_PENDING_KEY, 'true');
+  history.replaceState(null, '', location.pathname + location.search);
+  return true;
+}
 function showAuthScreen(mode) {
   $('#app-shell').hidden = true;
   $('#auth-screen').hidden = false;
   $('#auth-login').hidden = mode !== 'login';
   $('#auth-signup').hidden = mode !== 'signup';
+  $('#auth-invite').hidden = mode !== 'invite';
   $('#auth-pending').hidden = mode !== 'pending';
   $('#auth-config-warning').hidden = state.configured;
   authMessage('login-error', '');
   authMessage('signup-error', '');
+  authMessage('invite-password-error', '');
   authMessage('pending-error', '');
   if (mode === 'pending' && state.user && state.user.status === 'suspended') {
     $('#auth-pending h1').textContent = 'Acceso suspendido';
@@ -892,9 +914,13 @@ function renderUsers(users) {
   ).join('') || emptyState('Aún no hay cuentas.');
 }
 async function refreshUsers() {
-  if (!state.user || state.user.role !== 'admin') return;
+  if (!isActiveAdmin()) return;
   const users = await cloudRequest('profiles?select=id,email,username,display_name,role,status&order=created_at.asc');
   renderUsers(users);
+}
+function populateInviteRoles() {
+  const select = $('#invite-user-role');
+  select.innerHTML = ROLE_OPTIONS.map(role => '<option value="' + esc(role) + '">' + esc(roleName(role)) + '</option>').join('');
 }
 function renderHome() {
   renderGroups($('#module-groups'));
@@ -902,14 +928,16 @@ function renderHome() {
   $('#welcome-user').textContent = state.user.displayName.split(/\s+/)[0];
   $('#active-user').textContent = state.user.displayName;
   $('#active-role').textContent = roleName(state.user.role);
-  $('.admin-nav').hidden = state.user.role !== 'admin';
-  $('.admin-mobile-nav').hidden = state.user.role !== 'admin';
+  $('.admin-nav').hidden = !isActiveAdmin();
+  $('.admin-mobile-nav').hidden = !isActiveAdmin();
+  $('#invite-user-form').hidden = !isActiveAdmin();
+  populateInviteRoles();
   $('#home-subtitle').textContent = state.user.role === 'aereo' ? 'Captura vuelos y datos de apoyo para aplicaciones aéreas.' : state.user.role === 'terrestre' ? 'Captura calibraciones y labores de aplicación terrestre.' : state.user.role === 'supervisor' ? 'Revisa capturas y los apartados de Malezas y Calidad.' : 'Administra perfiles y revisa las capturas aéreas y terrestres.';
   refreshLists();
 }
 function navigate(page) {
   if (!state.user) return;
-  if (page === 'usuarios' && state.user.role !== 'admin') { toast('Solo la cuenta administradora puede gestionar usuarios.'); return; }
+  if (page === 'usuarios' && !isActiveAdmin()) { toast('Solo una cuenta administradora activa puede gestionar usuarios.'); return; }
   if (state.recordTimeTimer) { clearInterval(state.recordTimeTimer); state.recordTimeTimer = null; }
   $$('.page').forEach(section => { section.hidden = section.id !== 'page-' + page; });
   $$('.nav-item,.mobile-nav button').forEach(button => button.classList.toggle('active', button.dataset.page === page));
@@ -977,6 +1005,8 @@ async function endSession() {
   localStorage.removeItem(PROFILE_KEY);
   state.authSession = null;
   state.user = null;
+  state.acceptingInvite = false;
+  localStorage.removeItem(INVITE_PENDING_KEY);
   state.syncConnected = false;
   state.currentModule = null;
   if (state.recordTimeTimer) { clearInterval(state.recordTimeTimer); state.recordTimeTimer = null; }
@@ -1087,8 +1117,91 @@ $('#signup-form').addEventListener('submit', async event => {
     authMessage('signup-error', error.message || 'No se pudo registrar la solicitud.');
   }
 });
+$('#invite-password-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const password = $('#invite-password').value;
+  if (!event.currentTarget.reportValidity()) return;
+  if (password !== $('#invite-password-confirm').value) {
+    authMessage('invite-password-error', 'Las contraseñas no coinciden.');
+    return;
+  }
+  if (!state.acceptingInvite || !state.authSession) {
+    authMessage('invite-password-error', 'La invitación no está disponible. Solicita al administrador que envíe otra.');
+    return;
+  }
+  try {
+    const result = await apiRequest('/auth/v1/user', {
+      method: 'PUT',
+      token: state.authSession.access_token,
+      body: { password }
+    });
+    $('#invite-password').value = '';
+    $('#invite-password-confirm').value = '';
+    state.authSession.user = result;
+    state.acceptingInvite = false;
+    localStorage.removeItem(INVITE_PENDING_KEY);
+    saveAuthSession(state.authSession);
+  } catch (error) {
+    console.error(error);
+    authMessage('invite-password-error', error.message || 'No se pudo guardar la contraseña. Verifica que el enlace siga vigente.');
+    return;
+  }
+  try {
+    await refreshCloudProfile();
+  } catch (error) {
+    console.error(error);
+    showAuthScreen('pending');
+    authMessage('pending-error', 'La contraseña se guardó, pero no se pudo comprobar el perfil. Intenta comprobar el acceso de nuevo.');
+  }
+});
+$('#invite-user-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  if (!form.reportValidity()) return;
+  if (!isActiveAdmin()) {
+    authMessage('invite-user-message', 'Solo una cuenta administradora activa puede invitar usuarios.');
+    return;
+  }
+  if (!navigator.onLine) {
+    authMessage('invite-user-message', 'Conéctate a internet para enviar una invitación.');
+    return;
+  }
+  const submitButton = form.querySelector('button[type="submit"]');
+  submitButton.disabled = true;
+  let invitationSent = false;
+  authMessage('invite-user-message', '');
+  $('#invite-user-message').classList.remove('success-message');
+  try {
+    const invitation = await apiRequest('/functions/v1/invite-user', {
+      method: 'POST',
+      token: await accessToken(),
+      body: {
+        email: $('#invite-user-email').value.trim().toLowerCase(),
+        username: $('#invite-user-username').value.trim().toLowerCase(),
+        display_name: $('#invite-user-name').value.trim(),
+        role: $('#invite-user-role').value
+      }
+    });
+    invitationSent = true;
+    form.reset();
+    authMessage('invite-user-message', 'Invitación enviada a ' + invitation.email + '. La persona establecerá su contraseña desde el correo.');
+    $('#invite-user-message').classList.add('success-message');
+  } catch (error) {
+    console.error(error);
+    authMessage('invite-user-message', error.message || 'No se pudo enviar la invitación.');
+  } finally {
+    submitButton.disabled = false;
+  }
+  if (!invitationSent) return;
+  try {
+    await refreshUsers();
+  } catch (error) {
+    console.error(error);
+    authMessage('invite-user-message', 'La invitación se envió, pero no se pudo actualizar la lista de usuarios.');
+  }
+});
 async function saveMemberRole(userId) {
-  if (state.user.role !== 'admin') throw new Error('Solo un administrador puede asignar perfiles.');
+  if (!isActiveAdmin()) throw new Error('Solo un administrador activo puede asignar perfiles.');
   const select = $$('[data-member-role]').find(item => item.dataset.memberRole === userId);
   if (!select) throw new Error('No se encontró el perfil seleccionado.');
   await cloudRequest('rpc/set_member_role', { method: 'POST', body: { p_user_id: userId, p_role: select.value } });
@@ -1151,11 +1264,14 @@ async function init() {
       state.configured = false;
       $('#auth-config-warning small').textContent = error.message;
     }
+    const acceptingInvite = consumeInviteLink() || localStorage.getItem(INVITE_PENDING_KEY) === 'true';
+    state.acceptingInvite = acceptingInvite;
     const session = localStorage.getItem(SESSION_KEY);
     const profile = localStorage.getItem(PROFILE_KEY);
-    state.authSession = session ? JSON.parse(session) : null;
-    state.user = profile ? JSON.parse(profile) : null;
+    if (!acceptingInvite) state.authSession = session ? JSON.parse(session) : null;
+    state.user = acceptingInvite ? null : profile ? JSON.parse(profile) : null;
     if (!state.configured) showAuthScreen('login');
+    else if (acceptingInvite) showAuthScreen('invite');
     else if (state.authSession && state.user && state.user.status === 'active' && state.user.role !== 'pending') {
       if (navigator.onLine) {
         try { await refreshCloudProfile(); }

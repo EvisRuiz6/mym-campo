@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#174b38">
   <meta name="description" content="Captura de labores aéreas y terrestres para MyM Data">
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="app.css?v=14">
+  <link rel="stylesheet" href="app.css?v=15">
   <title>MyM Campo</title>
 </head>
 <body>
@@ -48,6 +48,19 @@
           <button class="primary-button" type="submit">Solicitar cuenta</button>
         </form>
         <p class="auth-note"><button class="text-button" type="button" data-auth-mode="login">Volver a iniciar sesión</button></p>
+      </div>
+      <div id="auth-invite" hidden>
+        <p class="eyebrow">INVITACIÓN DE ACCESO</p>
+        <h1>Establecer contraseña</h1>
+        <p class="subtitle">Elige una contraseña para activar tu cuenta.</p>
+        <form id="invite-password-form" class="auth-form">
+          <label class="field-label" for="invite-password">Contraseña (mínimo 8 caracteres)</label>
+          <input id="invite-password" class="text-input" type="password" autocomplete="new-password" minlength="8" required>
+          <label class="field-label" for="invite-password-confirm">Confirmar contraseña</label>
+          <input id="invite-password-confirm" class="text-input" type="password" autocomplete="new-password" minlength="8" required>
+          <p id="invite-password-error" class="auth-error" role="alert" hidden></p>
+          <button class="primary-button" type="submit">Guardar contraseña</button>
+        </form>
       </div>
       <div id="auth-pending" hidden>
         <p class="eyebrow">ACCESO EN REVISIÓN</p>
@@ -126,6 +139,18 @@
 
         <section id="page-usuarios" class="page" hidden>
           <p class="eyebrow">ADMINISTRACIÓN DE ACCESO</p><h1>Usuarios y perfiles</h1><p class="subtitle">Revisa las solicitudes y asigna el perfil permitido para cada cuenta del espacio compartido.</p>
+          <form id="invite-user-form" class="form-section invite-user-form">
+            <h2>Invitar usuario</h2>
+            <p class="field-hint">La persona recibirá un correo para establecer su propia contraseña.</p>
+            <div class="field-grid">
+              <div class="field"><label class="field-label" for="invite-user-name">Nombre completo</label><input id="invite-user-name" class="text-input" autocomplete="name" maxlength="120" required></div>
+              <div class="field"><label class="field-label" for="invite-user-username">Usuario (3 a 32 caracteres)</label><input id="invite-user-username" class="text-input" autocomplete="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9._-]{3,32}" required></div>
+              <div class="field"><label class="field-label" for="invite-user-email">Correo</label><input id="invite-user-email" class="text-input" type="email" autocomplete="email" maxlength="254" required></div>
+              <div class="field"><label class="field-label" for="invite-user-role">Perfil</label><select id="invite-user-role" class="select-input" required></select></div>
+            </div>
+            <p id="invite-user-message" class="auth-error" role="status" hidden></p>
+            <div class="form-actions"><button class="primary-button" type="submit">Enviar invitación</button></div>
+          </form>
           <section class="form-section"><p id="user-create-message" class="auth-error" role="status" hidden></p><div id="users-list" class="user-list"></div></section>
         </section>
       </main>
@@ -134,6 +159,6 @@
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </div>
   <script src="config.js"></script>
-  <script src="app.js?v=20"></script>
+  <script src="app.js?v=21"></script>
 </body>
 </html>

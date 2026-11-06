@@ -25,8 +25,17 @@ Las capturas nuevas se guardan primero en el dispositivo y se envían cuando vue
    where email = lower('administrador@ejemplo.com');
    ```
 
-   Comprueba que se modificó exactamente una fila. Cierra sesión y vuelve a entrar o pulsa **Comprobar acceso**. Después, las cuentas restantes pueden solicitar acceso y el administrador les asigna un perfil desde **Usuarios y perfiles**.
-7. Prueba con dos cuentas y dos dispositivos antes del uso operativo: confirma que una captura nueva se sincroniza, que el usuario normal no ve capturas ajenas, y que solo Supervisor/Administrador puede revisar una captura de otra persona.
+   Comprueba que se modificó exactamente una fila. Cierra sesión y vuelve a entrar o pulsa **Comprobar acceso**.
+7. Configura y despliega la función de invitación desde una instalación de Supabase CLI enlazada al proyecto. Establece `INVITE_REDIRECT_URL` como un secreto con la URL HTTPS raíz de la aplicación (por ejemplo, `https://mi-dominio.example/`) y agrega esa URL en **Authentication → URL Configuration → Redirect URLs**. Los secretos `SUPABASE_URL`, `SUPABASE_ANON_KEY` y `SUPABASE_SERVICE_ROLE_KEY` los proporciona el entorno de Supabase Edge Functions; la clave `service_role` solo se usa en el servidor y nunca se copia a este repositorio ni a `config.js`.
+
+   ```sh
+   supabase secrets set INVITE_REDIRECT_URL=https://mi-dominio.example/
+   supabase functions deploy invite-user
+   ```
+
+   La función valida el token del solicitante y vuelve a comprobar en `profiles` que sea administrador activo antes de usar Auth Admin. El correo de invitación lo entrega el servicio de correo de Supabase: configura SMTP propio para uso operativo y revisa la plantilla de invitación. El enlace vuelve a MyM Campo, donde la persona establece su contraseña; no se envía ni se genera una contraseña temporal. La función usa el perfil creado por el trigger de la migración existente, por lo que **no requiere una migración SQL adicional**. La lista/gestión de perfiles permanece protegida por las políticas/RPC existentes.
+8. Entra con la cuenta administradora y usa **Usuarios → Invitar usuario**. Completa nombre, usuario, correo y perfil. Las cuentas invitadas quedan activas con el perfil seleccionado, pero solo pueden establecer la contraseña a través del enlace de invitación. Si una invitación falla después de crear la cuenta, revisa su perfil en la lista de Usuarios y asígnale el perfil manualmente.
+9. Prueba con dos cuentas y dos dispositivos antes del uso operativo: confirma que una captura nueva se sincroniza, que el usuario normal no ve capturas ajenas, que solo Supervisor/Administrador puede revisar una captura de otra persona y que un usuario no administrador no puede invitar llamando directamente a la función.
 
 Las políticas de seguridad se aplican en PostgreSQL aunque un cliente modifique la interfaz. Mantén activado RLS; no concedas privilegios `service_role` a usuarios ni los incrustes en el frontend. La función de revisión no permite que una persona revise sus propias capturas.
 
@@ -42,4 +51,5 @@ Los archivos de imagen todavía viajan dentro del JSON del registro, como datos 
 
 - `node --check app.js`
 - `node --check server.mjs`
+- `node --test tests/invitation.test.mjs`
 - Con un proyecto configurado, completar la prueba manual de dos cuentas descrita arriba. Sin URL/clave válidas y el esquema aplicado, la autenticación y sincronización remotas no están disponibles.

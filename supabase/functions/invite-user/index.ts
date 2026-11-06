@@ -1,5 +1,5 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
-import { validateInvitation, zonesForRole } from '../_shared/invitation.mjs';
+import { fetchLotZones, validateInvitation, zonesForRole } from '../_shared/invitation.mjs';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -61,12 +61,13 @@ Deno.serve(async request => {
     return respond(403, { message: 'Solo una cuenta administradora activa puede invitar usuarios.' });
   }
 
-  const { data: zones, error: zonesError } = await adminClient.from('field_zones').select('zone');
-  if (zonesError) {
-    console.error('No se pudieron comprobar las zonas permitidas.', zonesError);
+  let allZones: string[];
+  try {
+    allZones = await fetchLotZones(adminClient);
+  } catch (error) {
+    console.error('No se pudieron comprobar las zonas permitidas.', error);
     return respond(500, { message: 'No se pudieron verificar las zonas configuradas.' });
   }
-  const allZones = (zones || []).map(item => item.zone);
   let allowedZones: string[];
   try {
     allowedZones = zonesForRole(invitation.role, invitation.allowed_zones, allZones);

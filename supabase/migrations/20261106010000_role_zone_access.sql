@@ -1,17 +1,28 @@
 alter table public.profiles
   add column if not exists allowed_zones text[] not null default '{}';
 
-create table if not exists public.field_zones (
-  zone text primary key check (length(trim(zone)) between 1 and 32)
-);
-
 create table if not exists public.field_lots (
   lot_code text primary key check (lot_code ~ '^[A-Za-z0-9._-]{1,32}$'),
-  zone text not null references public.field_zones (zone),
+  zone text not null check (length(trim(zone)) between 1 and 32),
   finca text not null check (length(trim(finca)) between 1 and 120)
 );
 
-alter table public.field_zones enable row level security;
+alter table public.field_lots drop constraint if exists field_lots_zone_fkey;
+drop table if exists public.field_zones;
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conrelid = 'public.field_lots'::regclass
+      and conname = 'field_lots_zone_check'
+  ) then
+    alter table public.field_lots
+      add constraint field_lots_zone_check check (length(trim(zone)) between 1 and 32);
+  end if;
+end;
+$$;
+
 alter table public.field_lots enable row level security;
 
 create or replace function public.current_user_can_access_zone(p_zone text)
@@ -155,7 +166,7 @@ begin
     select 1
     from unnest(requested_zones) as requested_zone(zone_name)
     where not exists (
-      select 1 from public.field_zones zone where zone.zone = requested_zone.zone_name
+      select 1 from public.field_lots lot where lot.zone = requested_zone.zone_name
     )
   ) then
     raise exception 'One or more zones are invalid';
@@ -179,7 +190,7 @@ begin
       status = case when p_role = 'pending' then 'pending' else 'active' end,
       allowed_zones = case
         when p_role in ('admin', 'aereo') then coalesce(
-          (select array_agg(zone order by zone) from public.field_zones),
+          (select array_agg(distinct zone order by zone) from public.field_lots),
           '{}'
         )
         else array(select distinct unnest(requested_zones) order by 1)
@@ -239,11 +250,6 @@ begin
 end;
 $$;
 
-drop policy if exists "Authenticated users read field zones" on public.field_zones;
-create policy "Authenticated users read field zones"
-  on public.field_zones for select to authenticated
-  using (true);
-
 drop policy if exists "Users read lots in assigned zones" on public.field_lots;
 create policy "Users read lots in assigned zones"
   on public.field_lots for select to authenticated
@@ -283,23 +289,13 @@ revoke all on function public.current_user_can_access_record_scope(jsonb) from p
 revoke all on function public.set_member_access(uuid, text, text[]) from public, anon;
 revoke all on function public.set_member_role(uuid, text) from public, anon;
 revoke all on function public.review_field_record(uuid, text, text) from public, anon;
-revoke all on table public.field_zones, public.field_lots from public, anon, authenticated;
+revoke all on table public.field_lots from public, anon, authenticated;
 grant execute on function public.current_user_can_access_zone(text) to authenticated;
 grant execute on function public.current_user_can_access_record_scope(jsonb) to authenticated;
 grant execute on function public.set_member_access(uuid, text, text[]) to authenticated;
 grant execute on function public.set_member_role(uuid, text) to authenticated;
 grant execute on function public.review_field_record(uuid, text, text) to authenticated;
-grant select on public.field_zones, public.field_lots to authenticated;
-
-insert into public.field_zones (zone) values
-  ('1'),
-  ('3'),
-  ('4'),
-  ('5'),
-  ('8'),
-  ('INAFEB'),
-  ('TERCEROS')
-on conflict (zone) do nothing;
+grant select on public.field_lots to authenticated;
 
 insert into public.field_lots (lot_code, zone, finca) values
   ('0100101', '1', 'CAMANTULUL'),
@@ -1530,3 +1526,21 @@ insert into public.field_lots (lot_code, zone, finca) values
   ('4970302', 'TERCEROS', 'SANTA ANA PILAR'),
   ('4970303', 'TERCEROS', 'SANTA ANA PILAR')
 on conflict (lot_code) do update set zone = excluded.zone, finca = excluded.finca;
+
+update public.profiles profile
+set allowed_zones = case
+  when profile.role in ('admin', 'aereo') then coalesce(
+    (select array_agg(distinct lot.zone order by lot.zone) from public.field_lots lot),
+    '{}'::text[]
+  )
+  else coalesce(
+    (
+      select array_agg(distinct assigned.zone order by assigned.zone)
+      from unnest(profile.allowed_zones) as assigned(zone)
+      where exists (
+        select 1 from public.field_lots lot where lot.zone = assigned.zone
+      )
+    ),
+    '{}'::text[]
+  )
+end;

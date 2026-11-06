@@ -224,6 +224,12 @@ dialog::backdrop { background: #17241c88; }
 .user-info strong { font-size: 12px; }
 .user-info small { color: var(--muted); font-size: 10px; margin-top: 3px; }
 .user-role { padding: 5px 8px; border-radius: 20px; background: #edf4ee; color: var(--forest); font-size: 10px; white-space: nowrap; }
+.member-actions { display: flex; align-items: center; gap: 8px; }
+.member-actions .select-input { min-width: 150px; min-height: 36px; padding: 6px 8px; font-size: 11px; }
+.member-actions .secondary-button { min-height: 36px; padding: 0 10px; font-size: 11px; }
+.record-review-actions { display: flex; gap: 5px; }
+.record-review-actions button { min-height: 30px; border: 1px solid #d7e0d9; border-radius: 6px; background: #fff; color: var(--forest); font-size: 10px; cursor: pointer; }
+.record-review-actions button[data-review="rejected"] { color: #9b3f32; }
 @media (max-width: 760px) {
   .auth-screen { padding: 16px; }
   .auth-card { padding: 22px; }
@@ -233,4 +239,8 @@ dialog::backdrop { background: #17241c88; }
   .picker-groups .module-group { padding: 12px; }
   .picker-groups .module-grid, .child-row .field-grid { grid-template-columns: 1fr; }
   .user-role { font-size: 9px; }
+  .user-row { flex-wrap: wrap; }
+  .member-actions { width: 100%; }
+  .member-actions .select-input { flex: 1; }
+  .record-review-actions { flex-direction: column; }
 }

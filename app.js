@@ -1,6 +1,8 @@
 const DB_NAME = 'mym-campo-local';
 const DB_VERSION = 2;
-const SESSION_KEY = 'mym-campo-session';
+const SESSION_KEY = 'mym-campo-auth-session';
+const PROFILE_KEY = 'mym-campo-auth-profile';
+const ROLE_OPTIONS = ['aereo', 'terrestre', 'supervisor', 'admin'];
 const modules = {
   clima: { title: 'Clima', subtitle: 'Ubicación y lecturas de las condiciones de campo.', icon: '☀', group: 'aereo', roles: ['aereo'] },
   malezas: { title: 'Malezas', subtitle: 'Visita y captura de control por lote.', icon: '⌁', group: 'supervision', roles: ['supervisor'] },
@@ -198,7 +200,7 @@ const childSchemas = {
 };
 const $ = (selector, root) => (root || document).querySelector(selector);
 const $$ = (selector, root) => [...(root || document).querySelectorAll(selector)];
-const state = { db: null, user: null, currentModule: null, recordTimeTimer: null, lotLookup: Object.create(null) };
+const state = { db: null, user: null, authSession: null, configured: false, syncConnected: false, syncBusy: false, refreshPromise: null, currentModule: null, recordTimeTimer: null, lotLookup: Object.create(null) };
 
 async function loadLotLookup() {
   try {
@@ -247,27 +249,151 @@ function storeRequest(storeName, mode, action) {
   });
 }
 const getRecords = () => storeRequest('records', 'readonly', store => store.getAll());
+const getRecord = id => storeRequest('records', 'readonly', store => store.get(id));
 const putRecord = record => storeRequest('records', 'readwrite', store => store.put(record));
-const getUsers = () => storeRequest('users', 'readonly', store => store.getAll());
-const getUser = username => storeRequest('users', 'readonly', store => store.get(username));
-const putUser = user => storeRequest('users', 'readwrite', store => store.put(user));
-function bytesToBase64(bytes) { return btoa(String.fromCharCode.apply(null, Array.from(bytes))); }
-function base64ToBytes(value) { return Uint8Array.from(atob(value), c => c.charCodeAt(0)); }
-async function derivePassword(password, salt) {
-  if (!crypto.subtle) throw new Error('Este navegador necesita HTTPS o localhost para crear cuentas.');
-  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
-  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: salt, iterations: 150000, hash: 'SHA-256' }, key, 256);
-  return bytesToBase64(new Uint8Array(bits));
+function supabaseConfig() {
+  const config = window.MYM_CONFIG || {};
+  const url = String(config.supabaseUrl || '').trim().replace(/\/+$/, '');
+  const anonKey = String(config.supabaseAnonKey || '').trim();
+  if (!url || !anonKey) return null;
+  const parsed = new URL(url);
+  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(parsed.hostname))) {
+    throw new Error('La URL de Supabase debe usar HTTPS (excepto en desarrollo local).');
+  }
+  return { url, anonKey };
 }
-async function makeUser(displayName, username, role, password) {
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  return { username: username.trim().toLowerCase(), displayName: displayName.trim(), role: role, salt: bytesToBase64(salt), passwordHash: await derivePassword(password, salt), createdAt: new Date().toISOString() };
+async function apiRequest(path, options) {
+  const config = supabaseConfig();
+  if (!config) throw new Error('Falta configurar Supabase en config.js.');
+  const headers = { apikey: config.anonKey, ...(options.headers || {}) };
+  if (options.token) headers.Authorization = 'Bearer ' + options.token;
+  if (options.body !== undefined) headers['Content-Type'] = 'application/json';
+  const response = await fetch(config.url + path, {
+    method: options.method || 'GET',
+    headers,
+    body: options.body === undefined ? undefined : JSON.stringify(options.body)
+  });
+  const text = await response.text();
+  let result = null;
+  if (text) {
+    try { result = JSON.parse(text); }
+    catch { throw new Error('Supabase devolvió una respuesta no válida.'); }
+  }
+  if (!response.ok) throw new Error(result && (result.msg || result.message || result.error_description || result.hint) || 'La solicitud al espacio compartido falló (' + response.status + ').');
+  return result;
 }
-async function verifyPassword(user, password) {
-  return user.passwordHash === await derivePassword(password, base64ToBytes(user.salt));
+function saveAuthSession(session) {
+  state.authSession = session;
+  localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+}
+function normalizeProfile(profile) {
+  return { id: profile.id, email: profile.email, username: profile.username, displayName: profile.display_name, role: profile.role, status: profile.status };
+}
+function saveProfile(profile) {
+  state.user = profile;
+  localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+}
+async function accessToken() {
+  const session = state.authSession;
+  if (!session) throw new Error('Inicia sesión para conectar con el espacio compartido.');
+  if (session.expires_at * 1000 > Date.now() + 60000) return session.access_token;
+  if (!navigator.onLine) return session.access_token;
+  if (!session.refresh_token) throw new Error('La sesión venció. Inicia sesión de nuevo.');
+  if (!state.refreshPromise) {
+    state.refreshPromise = apiRequest('/auth/v1/token?grant_type=refresh_token', {
+      method: 'POST',
+      body: { refresh_token: session.refresh_token }
+    }).then(refreshed => {
+      saveAuthSession({ ...refreshed, expires_at: refreshed.expires_at || Math.floor(Date.now() / 1000) + refreshed.expires_in });
+      return refreshed.access_token;
+    }).finally(() => { state.refreshPromise = null; });
+  }
+  return state.refreshPromise;
+}
+async function cloudRequest(path, options) {
+  return apiRequest('/rest/v1/' + path, { ...options, token: await accessToken() });
+}
+async function fetchProfile(userId) {
+  const rows = await cloudRequest('profiles?id=eq.' + encodeURIComponent(userId) + '&select=id,email,username,display_name,role,status');
+  if (!Array.isArray(rows) || !rows.length) throw new Error('No se encontró el perfil de esta cuenta en el espacio compartido.');
+  return normalizeProfile(rows[0]);
+}
+function mapCloudRecord(row) {
+  const profile = row.profiles || {};
+  return {
+    id: row.id, tipo: row.tipo, createdAt: row.created_at, schemaVersion: row.schema_version,
+    syncStatus: 'synced', ownerId: row.owner_id, ownerUsername: profile.username || '',
+    ownerName: profile.display_name || '', datos: row.datos, reviewStatus: row.review_status,
+    reviewedBy: row.reviewed_by, reviewedAt: row.reviewed_at, reviewNote: row.review_note
+  };
+}
+async function syncCloudRecords(importLegacy) {
+  if (!state.configured || !state.user) {
+    if (importLegacy) throw new Error('Configura el espacio compartido e inicia sesión antes de importar.');
+    return { uploaded: 0, downloaded: 0 };
+  }
+  if (!navigator.onLine) {
+    if (importLegacy) throw new Error('Conéctate a internet antes de importar los registros.');
+    return { uploaded: 0, downloaded: 0 };
+  }
+  if (state.syncBusy) {
+    if (importLegacy) throw new Error('La sincronización ya está en curso. Intenta de nuevo en unos segundos.');
+    return { uploaded: 0, downloaded: 0 };
+  }
+  state.syncBusy = true;
+  try {
+    const records = await getRecords();
+    const outgoing = records.filter(record =>
+      record.syncStatus === 'pending' &&
+      record.ownerUsername === state.user.username &&
+      (record.syncOrigin === 'new' || importLegacy)
+    );
+    for (const record of outgoing) {
+      await cloudRequest('field_records?on_conflict=id', {
+        method: 'POST',
+        headers: { Prefer: 'resolution=ignore-duplicates,return=minimal' },
+        body: {
+          id: record.id,
+          owner_id: state.user.id,
+          tipo: record.tipo,
+          schema_version: record.schemaVersion || 1,
+          datos: record.datos
+        }
+      });
+      delete record.syncOrigin;
+      record.syncStatus = 'synced';
+      await putRecord(record);
+    }
+
+    const remote = [];
+    for (let offset = 0, page; ; offset += 1000) {
+      page = await cloudRequest(
+        'field_records?select=id,owner_id,tipo,created_at,schema_version,datos,review_status,reviewed_by,reviewed_at,review_note,profiles!field_records_owner_id_fkey(username,display_name)&order=created_at.desc&limit=1000&offset=' + offset
+      );
+      remote.push(...page);
+      if (page.length < 1000) break;
+    }
+    await Promise.all(remote.map(row => putRecord(mapCloudRecord(row))));
+    state.syncConnected = true;
+    updateConnection();
+    await refreshLists();
+    return { uploaded: outgoing.length, downloaded: remote.length };
+  } finally {
+    state.syncBusy = false;
+  }
+}
+async function refreshCloudProfile() {
+  const profile = await fetchProfile(state.authSession.user.id);
+  saveProfile(profile);
+  if (profile.status === 'active' && profile.role !== 'pending') {
+    await startSession(profile, state.authSession);
+  } else {
+    state.user = profile;
+    showAuthScreen('pending');
+  }
 }
 function roleName(role) {
-  return role === 'admin' ? 'Administrador' : role === 'supervisor' ? 'Supervisor' : role === 'aereo' ? 'Aplicaciones aéreas' : 'Aplicaciones terrestres';
+  return role === 'admin' ? 'Administrador' : role === 'supervisor' ? 'Supervisor' : role === 'aereo' ? 'Aplicaciones aéreas' : role === 'terrestre' ? 'Aplicaciones terrestres' : 'Pendiente';
 }
 function initials(name) {
   return String(name || '?').trim().split(/\s+/).slice(0, 2).map(part => part[0]).join('').toUpperCase();
@@ -281,9 +407,19 @@ function showAuthScreen(mode) {
   $('#app-shell').hidden = true;
   $('#auth-screen').hidden = false;
   $('#auth-login').hidden = mode !== 'login';
-  $('#auth-setup').hidden = mode !== 'setup';
+  $('#auth-signup').hidden = mode !== 'signup';
+  $('#auth-pending').hidden = mode !== 'pending';
+  $('#auth-config-warning').hidden = state.configured;
   authMessage('login-error', '');
-  authMessage('setup-error', '');
+  authMessage('signup-error', '');
+  authMessage('pending-error', '');
+  if (mode === 'pending' && state.user && state.user.status === 'suspended') {
+    $('#auth-pending h1').textContent = 'Acceso suspendido';
+    $('#auth-pending .subtitle').textContent = 'Contacta al administrador del espacio compartido para revisar tu acceso.';
+  } else {
+    $('#auth-pending h1').textContent = 'Cuenta pendiente';
+    $('#auth-pending .subtitle').textContent = 'Un administrador debe asignarte un perfil. Cuando lo haga, vuelve a comprobar tu acceso.';
+  }
 }
 function userCanOpenModule(key) {
   const module = modules[key];
@@ -700,13 +836,18 @@ function recordRow(record) {
   const module = modules[record.tipo] || { icon: '•' };
   const site = record.datos.finca || record.datos.lote || record.datos.id_lote || 'Sin finca/lote';
   const detail = [site, record.ownerName, formatDate(record.datos.fecha || record.datos.FECHA)].filter(Boolean).join(' · ');
-  return '<article class="record-row"><span class="record-symbol" aria-hidden="true">' + module.icon + '</span><span class="record-info"><strong>' + esc(titleFor(record)) + '</strong><small>' + esc(detail) + '</small></span><span class="record-status">Pendiente</span></article>';
+  const reviewer = state.user && ['admin', 'supervisor'].includes(state.user.role);
+  const status = record.syncStatus !== 'synced' ? 'En cola' : record.reviewStatus === 'approved' ? 'Aprobado' : record.reviewStatus === 'rejected' ? 'Rechazado' : 'Pendiente de revisión';
+  const actions = reviewer && record.ownerId && record.ownerId !== state.user.id && record.reviewStatus === 'pending'
+    ? '<span class="record-review-actions"><button type="button" data-review="approved" data-record-id="' + esc(record.id) + '">Aprobar</button><button type="button" data-review="rejected" data-record-id="' + esc(record.id) + '">Rechazar</button></span>'
+    : '';
+  return '<article class="record-row"><span class="record-symbol" aria-hidden="true">' + module.icon + '</span><span class="record-info"><strong>' + esc(titleFor(record)) + '</strong><small>' + esc(detail) + '</small></span><span class="record-status">' + esc(status) + '</span>' + actions + '</article>';
 }
 function emptyState(message) { return '<div class="empty-state">' + esc(message) + '</div>'; }
 async function refreshLists() {
   if (!state.db || !state.user) return;
   let records = (await getRecords()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  if (state.user.role !== 'admin') records = records.filter(record => record.ownerUsername === state.user.username);
+  if (!['admin', 'supervisor'].includes(state.user.role)) records = records.filter(record => record.ownerUsername === state.user.username);
   const pending = records.filter(record => record.syncStatus === 'pending');
   $('#pending-badge').textContent = pending.length;
   $('#record-total').textContent = records.length + (records.length === 1 ? ' registro' : ' registros');
@@ -746,12 +887,14 @@ function captureLocation() {
   }, { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
 }
 function renderUsers(users) {
-  $('#users-list').innerHTML = users.slice().sort((a, b) => a.displayName.localeCompare(b.displayName, 'es')).map(user =>
-    '<article class="user-row"><span class="user-avatar">' + esc(initials(user.displayName)) + '</span><span class="user-info"><strong>' + esc(user.displayName) + '</strong><small>' + esc(user.username) + '</small></span><span class="user-role">' + esc(roleName(user.role)) + '</span></article>'
+  $('#users-list').innerHTML = users.slice().sort((a, b) => a.display_name.localeCompare(b.display_name, 'es')).map(user =>
+    '<article class="user-row"><span class="user-avatar">' + esc(initials(user.display_name)) + '</span><span class="user-info"><strong>' + esc(user.display_name) + '</strong><small>' + esc(user.email + ' · ' + user.username + ' · ' + (user.status === 'active' ? 'Activa' : user.status === 'suspended' ? 'Suspendida' : 'Pendiente')) + '</small></span><span class="user-role">' + esc(roleName(user.role)) + '</span><span class="member-actions"><select class="select-input" data-member-role="' + esc(user.id) + '" aria-label="Perfil para ' + esc(user.display_name) + '">' + ROLE_OPTIONS.map(role => '<option value="' + role + '"' + (user.role === role ? ' selected' : '') + '>' + esc(roleName(role)) + '</option>').join('') + '</select><button class="secondary-button" type="button" data-member-save="' + esc(user.id) + '">Guardar perfil</button></span></article>'
   ).join('') || emptyState('Aún no hay cuentas.');
 }
 async function refreshUsers() {
-  if (state.user && state.user.role === 'admin') renderUsers(await getUsers());
+  if (!state.user || state.user.role !== 'admin') return;
+  const users = await cloudRequest('profiles?select=id,email,username,display_name,role,status&order=created_at.asc');
+  renderUsers(users);
 }
 function renderHome() {
   renderGroups($('#module-groups'));
@@ -760,7 +903,8 @@ function renderHome() {
   $('#active-user').textContent = state.user.displayName;
   $('#active-role').textContent = roleName(state.user.role);
   $('.admin-nav').hidden = state.user.role !== 'admin';
-  $('#home-subtitle').textContent = state.user.role === 'aereo' ? 'Captura vuelos y datos de apoyo para aplicaciones aéreas.' : state.user.role === 'terrestre' ? 'Captura calibraciones y labores de aplicación terrestre.' : state.user.role === 'supervisor' ? 'Revisa los apartados de Malezas y Calidad.' : 'Administra perfiles y revisa las capturas aéreas y terrestres.';
+  $('.admin-mobile-nav').hidden = state.user.role !== 'admin';
+  $('#home-subtitle').textContent = state.user.role === 'aereo' ? 'Captura vuelos y datos de apoyo para aplicaciones aéreas.' : state.user.role === 'terrestre' ? 'Captura calibraciones y labores de aplicación terrestre.' : state.user.role === 'supervisor' ? 'Revisa capturas y los apartados de Malezas y Calidad.' : 'Administra perfiles y revisa las capturas aéreas y terrestres.';
   refreshLists();
 }
 function navigate(page) {
@@ -778,13 +922,13 @@ function navigate(page) {
     renderGroups($('#module-picker'));
   }
   if (page === 'pendientes' || page === 'registros' || page === 'inicio') refreshLists();
-  if (page === 'usuarios') refreshUsers();
+  if (page === 'usuarios') refreshUsers().catch(handleCloudError);
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 function updateConnection() {
   const online = navigator.onLine;
   $('#connection-state').classList.toggle('offline', !online);
-  $('#connection-state span').textContent = online ? 'Con conexión' : 'Sin conexión';
+  $('#connection-state span').textContent = !online ? 'Sin conexión' : state.syncConnected ? 'Espacio compartido' : 'Solo dispositivo';
   $('#offline-banner').hidden = online;
 }
 function downloadJson(records, name) {
@@ -795,18 +939,45 @@ function downloadJson(records, name) {
   anchor.click();
   URL.revokeObjectURL(url);
 }
-function startSession(user) {
-  state.user = user;
-  localStorage.setItem(SESSION_KEY, user.username);
+function handleCloudError(error) {
+  state.syncConnected = false;
+  updateConnection();
+  console.error('No se pudo completar la operación con el espacio compartido.', error);
+  if (state.user) toast(error.message || 'No se pudo conectar con el espacio compartido.');
+}
+async function startSession(user, session) {
+  state.authSession = session;
+  saveAuthSession(session);
+  saveProfile(user);
+  if (user.status !== 'active' || user.role === 'pending') {
+    showAuthScreen('pending');
+    return;
+  }
+  state.syncConnected = false;
   $('#auth-screen').hidden = true;
   $('#app-shell').hidden = false;
   renderHome();
   updateConnection();
   navigate('inicio');
+  if (navigator.onLine) {
+    try { await syncCloudRecords(false); }
+    catch (error) { handleCloudError(error); }
+  }
 }
-function endSession() {
+async function endSession() {
+  const session = state.authSession;
+  if (session && navigator.onLine && state.configured) {
+    try {
+      await apiRequest('/auth/v1/logout', { method: 'POST', token: await accessToken() });
+    } catch (error) {
+      console.warn('Se cerró la sesión local, pero no se pudo revocar la sesión remota.', error);
+    }
+  }
   localStorage.removeItem(SESSION_KEY);
+  localStorage.removeItem(PROFILE_KEY);
+  state.authSession = null;
   state.user = null;
+  state.syncConnected = false;
   state.currentModule = null;
   if (state.recordTimeTimer) { clearInterval(state.recordTimeTimer); state.recordTimeTimer = null; }
   $('#capture-form').reset();
@@ -814,6 +985,18 @@ function endSession() {
   showAuthScreen('login');
 }
 document.addEventListener('click', event => {
+  const authMode = event.target.closest('[data-auth-mode]');
+  if (authMode) { showAuthScreen(authMode.dataset.authMode); return; }
+  const reviewButton = event.target.closest('[data-review]');
+  if (reviewButton) {
+    reviewRecord(reviewButton.dataset.recordId, reviewButton.dataset.review).catch(handleCloudError);
+    return;
+  }
+  const memberButton = event.target.closest('[data-member-save]');
+  if (memberButton) {
+    saveMemberRole(memberButton.dataset.memberSave).catch(handleCloudError);
+    return;
+  }
   const childAdd = event.target.closest('[data-add-child]');
   if (childAdd) { addChildRow(childAdd.dataset.addChild); return; }
   const childRemove = event.target.closest('[data-remove-child]');
@@ -848,7 +1031,7 @@ $('#capture-form').addEventListener('submit', async event => {
   datos.hora_registro = createdAt;
   const record = {
     id: recordId, tipo: state.currentModule, createdAt, schemaVersion: 5, syncStatus: 'pending',
-    ownerUsername: state.user.username, ownerName: state.user.displayName, ownerRole: state.user.role, datos: datos
+    syncOrigin: 'new', ownerUsername: state.user.username, ownerName: state.user.displayName, ownerRole: state.user.role, datos: datos
   };
   try {
     await putRecord(record);
@@ -856,6 +1039,7 @@ $('#capture-form').addEventListener('submit', async event => {
     form.reset();
     toast('Guardado en este dispositivo.');
     navigate('inicio');
+    if (navigator.onLine) syncCloudRecords(false).catch(handleCloudError);
   } catch (error) {
     console.error(error);
     toast('No se pudo guardar localmente. Revisa el almacenamiento del dispositivo.');
@@ -863,76 +1047,133 @@ $('#capture-form').addEventListener('submit', async event => {
 });
 $('#login-form').addEventListener('submit', async event => {
   event.preventDefault();
-  const username = $('#login-username').value.trim().toLowerCase();
+  const email = $('#login-email').value.trim().toLowerCase();
   const password = $('#login-password').value;
   try {
-    const user = await getUser(username);
-    if (!user || !(await verifyPassword(user, password))) { authMessage('login-error', 'Usuario o contraseña incorrectos.'); return; }
+    const result = await apiRequest('/auth/v1/token?grant_type=password', { method: 'POST', body: { email, password } });
     $('#login-password').value = '';
-    startSession(user);
+    saveAuthSession({ ...result, expires_at: result.expires_at || Math.floor(Date.now() / 1000) + result.expires_in });
+    await refreshCloudProfile();
   } catch (error) {
     console.error(error);
-    authMessage('login-error', 'No se pudo validar la cuenta en este dispositivo.');
+    authMessage('login-error', error.message || 'No se pudo iniciar sesión.');
   }
 });
-$('#setup-form').addEventListener('submit', async event => {
+$('#signup-form').addEventListener('submit', async event => {
   event.preventDefault();
   if (!event.currentTarget.reportValidity()) return;
-  const password = $('#setup-password').value;
-  if (password !== $('#setup-confirm').value) { authMessage('setup-error', 'Las contraseñas no coinciden.'); return; }
   try {
-    const user = await makeUser($('#setup-name').value, $('#setup-username').value, 'admin', password);
-    await putUser(user);
+    const result = await apiRequest('/auth/v1/signup', {
+      method: 'POST',
+      body: {
+        email: $('#signup-email').value.trim().toLowerCase(),
+        password: $('#signup-password').value,
+        data: {
+          display_name: $('#signup-name').value.trim(),
+          username: $('#signup-username').value.trim().toLowerCase()
+        }
+      }
+    });
     event.currentTarget.reset();
-    startSession(user);
+    if (result && result.access_token) {
+      saveAuthSession({ ...result, expires_at: result.expires_at || Math.floor(Date.now() / 1000) + result.expires_in });
+      await refreshCloudProfile();
+    } else {
+      showAuthScreen('login');
+      authMessage('login-error', 'Solicitud registrada. Confirma tu correo si se solicita; un administrador debe activar tu perfil.');
+    }
   } catch (error) {
     console.error(error);
-    authMessage('setup-error', error.message || 'No se pudo crear la cuenta administradora.');
+    authMessage('signup-error', error.message || 'No se pudo registrar la solicitud.');
   }
 });
-$('#user-create-form').addEventListener('submit', async event => {
-  event.preventDefault();
-  if (state.user.role !== 'admin' || !event.currentTarget.reportValidity()) return;
-  const displayName = $('#new-user-name').value.trim();
-  const username = $('#new-username').value.trim().toLowerCase();
-  const role = $('#new-user-role').value;
-  const password = $('#new-user-password').value;
-  try {
-    if (await getUser(username)) { authMessage('user-create-message', 'Ese usuario ya existe en este dispositivo.'); return; }
-    await putUser(await makeUser(displayName, username, role, password));
-    event.currentTarget.reset();
-    $('#new-user-role').value = 'aereo';
-    authMessage('user-create-message', 'Cuenta creada en este dispositivo.');
-    $('#user-create-message').classList.add('success-message');
-    await refreshUsers();
-  } catch (error) {
-    console.error(error);
-    authMessage('user-create-message', error.message || 'No se pudo crear la cuenta.');
+async function saveMemberRole(userId) {
+  if (state.user.role !== 'admin') throw new Error('Solo un administrador puede asignar perfiles.');
+  const select = $$('[data-member-role]').find(item => item.dataset.memberRole === userId);
+  if (!select) throw new Error('No se encontró el perfil seleccionado.');
+  await cloudRequest('rpc/set_member_role', { method: 'POST', body: { p_user_id: userId, p_role: select.value } });
+  authMessage('user-create-message', 'Perfil actualizado.');
+  $('#user-create-message').classList.add('success-message');
+  await refreshUsers();
+}
+async function reviewRecord(recordId, decision) {
+  if (!['approved', 'rejected'].includes(decision) || !['admin', 'supervisor'].includes(state.user.role)) return;
+  await cloudRequest('rpc/review_field_record', {
+    method: 'POST',
+    body: { p_record_id: recordId, p_decision: decision, p_note: null }
+  });
+  const record = await getRecord(recordId);
+  if (record) {
+    record.reviewStatus = decision;
+    record.reviewedBy = state.user.id;
+    record.reviewedAt = new Date().toISOString();
+    await putRecord(record);
   }
+  await refreshLists();
+  await syncCloudRecords(false);
+  toast(decision === 'approved' ? 'Captura aprobada.' : 'Captura rechazada.');
+}
+$('#check-access').addEventListener('click', async () => {
+  try { await refreshCloudProfile(); }
+  catch (error) { authMessage('pending-error', error.message || 'No se pudo comprobar el acceso.'); }
 });
+$('#pending-logout').addEventListener('click', endSession);
 $('#record-search').addEventListener('input', refreshLists);
-$('#export-all').addEventListener('click', async () => downloadJson(await getRecords(), 'mym-campo-' + localDate() + '.json'));
-$('#export-pending').addEventListener('click', async () => downloadJson((await getRecords()).filter(record => record.syncStatus === 'pending'), 'mym-campo-pendientes-' + localDate() + '.json'));
+function visibleLocalRecords(records) {
+  return ['admin', 'supervisor'].includes(state.user.role) ? records : records.filter(record => record.ownerUsername === state.user.username);
+}
+$('#import-local').addEventListener('click', async () => {
+  try {
+    const result = await syncCloudRecords(true);
+    toast(result.uploaded + ' registros locales importados; ' + result.downloaded + ' registros compartidos actualizados.');
+  } catch (error) { handleCloudError(error); }
+});
+$('#sync-now').addEventListener('click', async () => {
+  try {
+    const result = await syncCloudRecords(false);
+    toast(result.uploaded + ' capturas nuevas sincronizadas; ' + result.downloaded + ' registros compartidos actualizados.');
+  } catch (error) { handleCloudError(error); }
+});
+$('#export-all').addEventListener('click', async () => downloadJson(visibleLocalRecords(await getRecords()), 'mym-campo-' + localDate() + '.json'));
+$('#export-pending').addEventListener('click', async () => downloadJson(visibleLocalRecords(await getRecords()).filter(record => record.syncStatus === 'pending'), 'mym-campo-pendientes-' + localDate() + '.json'));
 $('#logout-button').addEventListener('click', endSession);
-window.addEventListener('online', updateConnection);
+window.addEventListener('online', () => {
+  updateConnection();
+  syncCloudRecords(false).catch(handleCloudError);
+});
 window.addEventListener('offline', updateConnection);
 async function init() {
   try {
     await loadLotLookup();
     state.db = await openDb();
-    const users = await getUsers();
-    if (!users.length) {
-      showAuthScreen('setup');
-    } else {
-      const remembered = localStorage.getItem(SESSION_KEY);
-      const user = remembered ? await getUser(remembered) : null;
-      if (user) startSession(user);
-      else showAuthScreen('login');
+    try { state.configured = !!supabaseConfig(); }
+    catch (error) {
+      state.configured = false;
+      $('#auth-config-warning small').textContent = error.message;
     }
+    const session = localStorage.getItem(SESSION_KEY);
+    const profile = localStorage.getItem(PROFILE_KEY);
+    state.authSession = session ? JSON.parse(session) : null;
+    state.user = profile ? JSON.parse(profile) : null;
+    if (!state.configured) showAuthScreen('login');
+    else if (state.authSession && state.user && state.user.status === 'active' && state.user.role !== 'pending') {
+      if (navigator.onLine) {
+        try { await refreshCloudProfile(); }
+        catch (error) {
+          console.warn('Se usará la sesión local hasta recuperar conexión con el espacio compartido.', error);
+          await startSession(state.user, state.authSession);
+          handleCloudError(error);
+        }
+      } else {
+        await startSession(state.user, state.authSession);
+      }
+    } else if (state.authSession) {
+      showAuthScreen('pending');
+    } else showAuthScreen('login');
   } catch (error) {
     console.error(error);
-    showAuthScreen('setup');
-    authMessage('setup-error', 'El navegador no habilitó el almacenamiento local. Usa HTTPS o localhost y vuelve a abrir la app.');
+    showAuthScreen('login');
+    authMessage('login-error', 'No se pudo abrir el almacenamiento local. Usa HTTPS o localhost y vuelve a abrir la app.');
   }
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('./service-worker.js').catch(error => console.warn('No se pudo activar el modo sin conexión', error));
 }

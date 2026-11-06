@@ -6,44 +6,56 @@
   <meta name="theme-color" content="#174b38">
   <meta name="description" content="Captura de labores aéreas y terrestres para MyM Data">
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="app.css?v=13">
+  <link rel="stylesheet" href="app.css?v=14">
   <title>MyM Campo</title>
 </head>
 <body>
   <main id="auth-screen" class="auth-screen">
     <section class="auth-card" aria-labelledby="auth-title">
       <div class="auth-brand"><span class="brand-mark">M</span><div><strong>MyM Campo</strong><small>Aplicaciones aéreas y terrestres</small></div></div>
+      <div id="auth-config-warning" class="status-strip warning-strip" hidden>
+        <span class="status-check">!</span>
+        <div><strong>Falta conectar el espacio compartido</strong><small>Configura la URL y la clave pública de Supabase siguiendo el README. No uses una clave service_role en el navegador.</small></div>
+      </div>
       <div id="auth-login" hidden>
         <p class="eyebrow">ACCESO DE USUARIO</p>
         <h1 id="auth-title">Iniciar sesión</h1>
-        <p class="subtitle">Ingresa con el usuario que te asignó el administrador.</p>
+        <p class="subtitle">Ingresa con el correo y la contraseña de tu cuenta.</p>
         <form id="login-form" class="auth-form">
-          <label class="field-label" for="login-username">Usuario</label>
-          <input id="login-username" class="text-input" autocomplete="username" required>
+          <label class="field-label" for="login-email">Correo</label>
+          <input id="login-email" class="text-input" type="email" autocomplete="username" required>
           <label class="field-label" for="login-password">Contraseña</label>
           <input id="login-password" class="text-input" type="password" autocomplete="current-password" required>
           <p id="login-error" class="auth-error" role="alert" hidden></p>
           <button class="primary-button" type="submit">Entrar</button>
         </form>
-        <p class="auth-note">Acceso local de prototipo. Las cuentas de este dispositivo no se comparten todavía con otros teléfonos.</p>
+        <p class="auth-note">¿Aún no tienes cuenta? <button class="text-button" type="button" data-auth-mode="signup">Solicitar acceso</button></p>
       </div>
-      <div id="auth-setup" hidden>
-        <p class="eyebrow">PRIMER USO</p>
-        <h1>Crear administrador</h1>
-        <p class="subtitle">Configura la cuenta que administrará los usuarios y sus perfiles.</p>
-        <form id="setup-form" class="auth-form">
-          <label class="field-label" for="setup-name">Nombre</label>
-          <input id="setup-name" class="text-input" autocomplete="name" required>
-          <label class="field-label" for="setup-username">Usuario administrador</label>
-          <input id="setup-username" class="text-input" autocomplete="username" required>
-          <label class="field-label" for="setup-password">Contraseña (mínimo 8 caracteres)</label>
-          <input id="setup-password" class="text-input" type="password" autocomplete="new-password" minlength="8" required>
-          <label class="field-label" for="setup-confirm">Confirmar contraseña</label>
-          <input id="setup-confirm" class="text-input" type="password" autocomplete="new-password" minlength="8" required>
-          <p id="setup-error" class="auth-error" role="alert" hidden></p>
-          <button class="primary-button" type="submit">Crear administrador</button>
+      <div id="auth-signup" hidden>
+        <p class="eyebrow">SOLICITUD DE ACCESO</p>
+        <h1>Crear cuenta</h1>
+        <p class="subtitle">Un administrador debe activar tu perfil antes de capturar datos.</p>
+        <form id="signup-form" class="auth-form">
+          <label class="field-label" for="signup-name">Nombre completo</label>
+          <input id="signup-name" class="text-input" autocomplete="name" required>
+          <label class="field-label" for="signup-username">Usuario (3 a 32 caracteres: letras, números, punto, guion o guion bajo)</label>
+          <input id="signup-username" class="text-input" autocomplete="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9._-]{3,32}" required>
+          <label class="field-label" for="signup-email">Correo</label>
+          <input id="signup-email" class="text-input" type="email" autocomplete="email" required>
+          <label class="field-label" for="signup-password">Contraseña (mínimo 8 caracteres)</label>
+          <input id="signup-password" class="text-input" type="password" autocomplete="new-password" minlength="8" required>
+          <p id="signup-error" class="auth-error" role="alert" hidden></p>
+          <button class="primary-button" type="submit">Solicitar cuenta</button>
         </form>
-        <p class="auth-note">Este prototipo guarda cuentas en el navegador actual. Para producción, requiere autenticación y base de datos compartidas.</p>
+        <p class="auth-note"><button class="text-button" type="button" data-auth-mode="login">Volver a iniciar sesión</button></p>
+      </div>
+      <div id="auth-pending" hidden>
+        <p class="eyebrow">ACCESO EN REVISIÓN</p>
+        <h1>Cuenta pendiente</h1>
+        <p class="subtitle">Un administrador debe asignarte un perfil. Cuando lo haga, vuelve a comprobar tu acceso.</p>
+        <p id="pending-error" class="auth-error" role="alert" hidden></p>
+        <button id="check-access" class="primary-button" type="button">Comprobar acceso</button>
+        <button id="pending-logout" class="secondary-button" type="button">Salir</button>
       </div>
     </section>
   </main>
@@ -71,7 +83,7 @@
         <button class="nav-item" data-page="pendientes"><span class="nav-icon">◷</span> Pendientes <b id="pending-badge" class="nav-count">0</b></button>
         <button class="nav-item" data-page="registros"><span class="nav-icon">▤</span> Registros del dispositivo</button>
         <button class="nav-item admin-nav" data-page="usuarios" hidden><span class="nav-icon">♙</span> Usuarios</button>
-        <div class="side-note"><span class="sync-dot"></span><div><strong>Guardado local</strong><small>Las capturas quedan en este dispositivo hasta conectar la sincronización.</small></div></div>
+        <div class="side-note"><span class="sync-dot"></span><div><strong>Captura y sincronización</strong><small>Las capturas sin conexión quedan en cola y se envían al recuperar conexión.</small></div></div>
       </aside>
 
       <main id="main" class="main-content">
@@ -80,7 +92,7 @@
             <div><p class="eyebrow">ESPACIO DE CAMPO</p><h1>Buen día, <span id="welcome-user">Usuario</span></h1><p class="subtitle" id="home-subtitle">Registra una actividad. Si estás sin señal, se guardará y quedará lista para sincronizar.</p></div>
             <button class="primary-button" data-goto="capturar" type="button"><span>＋</span> Nueva captura</button>
           </div>
-          <div class="status-strip"><span class="status-check">✓</span><div><strong>Captura disponible sin conexión</strong><small>Los datos de este prototipo quedan en el almacenamiento de este dispositivo.</small></div><span class="status-tag">LOCAL</span></div>
+          <div class="status-strip"><span class="status-check">✓</span><div><strong>Captura disponible sin conexión</strong><small>Las capturas se guardan en este dispositivo y se sincronizan al espacio compartido cuando hay conexión.</small></div><span class="status-tag">COLA LOCAL</span></div>
           <div id="module-groups"></div>
           <div class="section-heading recent-heading"><div><p class="eyebrow">EN ESTE DISPOSITIVO</p><h2>Últimas capturas</h2></div><span id="record-total" class="muted-inline">0 registros</span></div>
           <div id="recent-list" class="record-list"></div>
@@ -92,43 +104,36 @@
           <div id="module-picker" class="picker-groups"></div>
           <form id="capture-form" class="capture-form" hidden novalidate>
             <div id="form-fields"></div>
-            <div class="form-actions"><button class="secondary-button" data-goto="inicio" type="button">Cancelar</button><button class="primary-button" type="submit">Guardar en dispositivo</button></div>
-            <p class="form-footnote">Se guardará localmente, aunque no haya señal. La sincronización compartida se conectará en una etapa posterior.</p>
+            <div class="form-actions"><button class="secondary-button" data-goto="inicio" type="button">Cancelar</button><button class="primary-button" type="submit">Guardar captura</button></div>
+            <p class="form-footnote">Se guarda primero en el dispositivo y se sincroniza cuando hay conexión.</p>
           </form>
         </section>
 
         <section id="page-pendientes" class="page" hidden>
           <p class="eyebrow">SINCRONIZACIÓN</p><h1>Pendientes</h1><p class="subtitle">Registros que todavía no se han enviado a una fuente compartida.</p>
-          <div class="status-strip warning-strip"><span class="status-check">!</span><div><strong>La sincronización aún no está conectada</strong><small>Los demás usuarios no verán estas capturas hasta conectar un servidor compartido.</small></div></div>
+          <div class="status-strip warning-strip"><span class="status-check">!</span><div><strong>Capturas pendientes de sincronización</strong><small>Las capturas nuevas se envían al recuperar conexión. Importa de forma explícita los registros locales anteriores de tu propia cuenta.</small></div></div>
           <div id="pending-list" class="record-list"></div>
+          <button id="sync-now" class="secondary-button" type="button">Sincronizar pendientes</button>
+          <button id="import-local" class="secondary-button" type="button">Importar registros locales de esta cuenta</button>
           <button id="export-pending" class="secondary-button" type="button">Exportar pendientes (JSON)</button>
         </section>
 
         <section id="page-registros" class="page" hidden>
-          <p class="eyebrow">ALMACENAMIENTO LOCAL</p><h1>Registros del dispositivo</h1><p class="subtitle">El personal ve sus capturas; el administrador puede revisar todas las cuentas de este navegador.</p>
+          <p class="eyebrow">REGISTROS COMPARTIDOS</p><h1>Registros</h1><p class="subtitle">Cada usuario ve sus capturas; supervisores y administradores pueden revisar las del equipo.</p>
           <div class="record-toolbar"><label class="search-field">⌕ <input id="record-search" type="search" placeholder="Buscar por finca, actividad o responsable" aria-label="Buscar registros"></label><button id="export-all" class="secondary-button" type="button">Exportar JSON</button></div>
           <div id="all-records" class="record-list"></div>
         </section>
 
         <section id="page-usuarios" class="page" hidden>
-          <p class="eyebrow">ADMINISTRACIÓN LOCAL</p><h1>Usuarios y perfiles</h1><p class="subtitle">Crea cuentas y asigna si usarán las capturas aéreas o terrestres en este dispositivo.</p>
-          <div class="status-strip warning-strip"><span class="status-check">!</span><div><strong>Las cuentas son locales a este navegador</strong><small>El prototipo todavía no distribuye usuarios, contraseñas ni registros entre los 15 dispositivos.</small></div></div>
-          <section class="form-section"><h2>Agregar usuario</h2>
-            <form id="user-create-form" class="field-grid">
-              <div class="field"><label class="field-label" for="new-user-name">Nombre completo *</label><input id="new-user-name" name="displayName" class="text-input" required></div>
-              <div class="field"><label class="field-label" for="new-username">Usuario *</label><input id="new-username" name="username" class="text-input" autocomplete="off" required></div>
-              <div class="field"><label class="field-label" for="new-user-role">Perfil *</label><select id="new-user-role" name="role" class="select-input" required><option value="aereo">Aplicaciones aéreas</option><option value="terrestre">Aplicaciones terrestres</option><option value="supervisor">Supervisor</option><option value="admin">Administrador</option></select></div>
-              <div class="field"><label class="field-label" for="new-user-password">Contraseña (mínimo 8 caracteres) *</label><input id="new-user-password" name="password" class="text-input" type="password" minlength="8" autocomplete="new-password" required></div>
-              <div class="field full"><p id="user-create-message" class="auth-error" role="status" hidden></p><button class="primary-button" type="submit">Crear cuenta</button></div>
-            </form>
-          </section>
-          <section class="form-section"><h2>Cuentas en este dispositivo</h2><div id="users-list" class="user-list"></div></section>
+          <p class="eyebrow">ADMINISTRACIÓN DE ACCESO</p><h1>Usuarios y perfiles</h1><p class="subtitle">Revisa las solicitudes y asigna el perfil permitido para cada cuenta del espacio compartido.</p>
+          <section class="form-section"><p id="user-create-message" class="auth-error" role="status" hidden></p><div id="users-list" class="user-list"></div></section>
         </section>
       </main>
     </div>
-    <nav class="mobile-nav" aria-label="Navegación móvil"><button data-page="inicio" class="active"><span>⌂</span>Inicio</button><button data-page="capturar"><span>＋</span>Capturar</button><button data-page="pendientes"><span>◷</span>Pendientes</button><button data-page="registros"><span>▤</span>Registros</button></nav>
+    <nav class="mobile-nav" aria-label="Navegación móvil"><button data-page="inicio" class="active"><span>⌂</span>Inicio</button><button data-page="capturar"><span>＋</span>Capturar</button><button data-page="pendientes"><span>◷</span>Pendientes</button><button data-page="registros"><span>▤</span>Registros</button><button class="admin-mobile-nav" data-page="usuarios" hidden><span>♙</span>Usuarios</button></nav>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </div>
-  <script src="app.js?v=19"></script>
+  <script src="config.js"></script>
+  <script src="app.js?v=20"></script>
 </body>
 </html>

@@ -88,3 +88,8 @@ export function zonesForRole(role, requestedZones, configuredZones) {
     ? allZones
     : [...new Set(requestedZones)];
 }
+
+export function zonesFromLots(lots) {
+  return [...new Set(lots.map(lot => lot.zone).filter(zone => typeof zone === 'string' && zone.length > 0))]
+    .sort((a, b) => a.localeCompare(b, 'es'));
+}

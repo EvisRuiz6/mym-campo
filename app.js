@@ -1367,7 +1367,6 @@ window.addEventListener('online', () => {
 window.addEventListener('offline', updateConnection);
 async function init() {
   try {
-    await loadLotLookup();
     state.db = await openDb();
     try { state.configured = !!supabaseConfig(); }
     catch (error) {

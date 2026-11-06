@@ -2,6 +2,9 @@ alter table public.field_lots
   drop constraint if exists field_lots_zone_fkey;
 
 alter table public.field_lots
+  drop constraint if exists field_lots_zone_check;
+
+alter table public.field_lots
   add constraint field_lots_zone_check
   check (length(trim(zone)) between 1 and 32);
 
@@ -83,4 +86,4 @@ set allowed_zones = case
   )
 end;
 
-drop table public.field_zones;
+drop table if exists public.field_zones;

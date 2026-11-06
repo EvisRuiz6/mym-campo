@@ -5,6 +5,21 @@ export function noEmailAuthAddress(username) {
   return `${username}@${NO_EMAIL_AUTH_DOMAIN}`;
 }
 
+export async function fetchLotZones(client) {
+  const lots = [];
+  for (let offset = 0; ; offset += 1000) {
+    const { data, error } = await client
+      .from('field_lots')
+      .select('zone')
+      .order('lot_code')
+      .range(offset, offset + 999);
+    if (error) throw error;
+    lots.push(...(data || []));
+    if (!data || data.length < 1000) break;
+  }
+  return zonesFromLots(lots);
+}
+
 export function validateUserCreation(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     throw new Error('El cuerpo de la solicitud no es válido.');

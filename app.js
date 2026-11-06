@@ -936,13 +936,13 @@ function renderUsers(users, zones) {
 async function refreshUsers() {
   if (!isActiveAdmin()) return;
   const users = await cloudRequest('profiles?select=id,email,username,display_name,role,status,allowed_zones&order=created_at.asc');
-  const lots = [];
-  for (let offset = 0, page; ; offset += 1000) {
-    page = await cloudRequest('field_lots?select=zone&order=zone.asc&limit=1000&offset=' + offset);
-    lots.push(...page);
-    if (page.length < 1000) break;
+  const zones = new Set();
+  for (let offset = 0, lots; ; offset += 1000) {
+    lots = await cloudRequest('field_lots?select=zone&order=lot_code.asc&limit=1000&offset=' + offset);
+    for (const lot of lots) zones.add(lot.zone);
+    if (lots.length < 1000) break;
   }
-  state.zoneOptions = [...new Set(lots.map(lot => lot.zone))].sort((a, b) => a.localeCompare(b, 'es'));
+  state.zoneOptions = [...zones].sort((a, b) => a.localeCompare(b, 'es'));
   updateInviteZoneVisibility();
   updateCreateUserZoneVisibility();
   renderUsers(users, state.zoneOptions);

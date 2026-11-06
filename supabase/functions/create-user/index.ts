@@ -1,5 +1,5 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
-import { noEmailAuthAddress, validateUserCreation, zonesForRole, zonesFromLots } from '../_shared/invitation.mjs';
+import { fetchLotZones, noEmailAuthAddress, validateUserCreation, zonesForRole } from '../_shared/invitation.mjs';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -59,21 +59,17 @@ Deno.serve(async request => {
     return respond(403, { message: 'Solo una cuenta administradora activa puede crear usuarios.' });
   }
 
-  const lots: Array<{ zone: string }> = [];
-  for (let offset = 0; ; offset += 1000) {
-    const result = await adminClient.from('field_lots').select('zone').order('zone').range(offset, offset + 999);
-    if (result.error) {
-      console.error('No se pudieron comprobar las zonas permitidas.', result.error);
-      return respond(500, { message: 'No se pudieron verificar las zonas configuradas.' });
-    }
-    const page: Array<{ zone: string }> = result.data || [];
-    lots.push(...page);
-    if (page.length < 1000) break;
+  let allZones: string[];
+  try {
+    allZones = await fetchLotZones(adminClient);
+  } catch (error) {
+    console.error('No se pudieron comprobar las zonas permitidas.', error);
+    return respond(500, { message: 'No se pudieron verificar las zonas configuradas.' });
   }
 
   let allowedZones: string[];
   try {
-    allowedZones = zonesForRole(userInput.role, userInput.allowed_zones, zonesFromLots(lots));
+    allowedZones = zonesForRole(userInput.role, userInput.allowed_zones, allZones);
   } catch (error) {
     return respond(400, { message: error instanceof Error ? error.message : 'La selección de zonas no es válida.' });
   }

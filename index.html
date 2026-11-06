@@ -20,10 +20,10 @@
       <div id="auth-login" hidden>
         <p class="eyebrow">ACCESO DE USUARIO</p>
         <h1 id="auth-title">Iniciar sesión</h1>
-        <p class="subtitle">Ingresa con el correo y la contraseña de tu cuenta.</p>
+        <p class="subtitle">Ingresa con tu usuario o correo y la contraseña de tu cuenta.</p>
         <form id="login-form" class="auth-form">
-          <label class="field-label" for="login-email">Correo</label>
-          <input id="login-email" class="text-input" type="email" autocomplete="username" required>
+          <label class="field-label" for="login-email">Usuario o correo</label>
+          <input id="login-email" class="text-input" type="text" autocomplete="username" required>
           <label class="field-label" for="login-password">Contraseña</label>
           <input id="login-password" class="text-input" type="password" autocomplete="current-password" required>
           <p id="login-error" class="auth-error" role="alert" hidden></p>
@@ -139,6 +139,24 @@
 
         <section id="page-usuarios" class="page" hidden>
           <p class="eyebrow">ADMINISTRACIÓN DE ACCESO</p><h1>Usuarios y perfiles</h1><p class="subtitle">Revisa las solicitudes y asigna el perfil permitido para cada cuenta del espacio compartido.</p>
+          <form id="create-user-form" class="form-section invite-user-form" hidden>
+            <h2>Crear usuario sin correo</h2>
+            <p class="field-hint">Define una contraseña inicial y entrégala a la persona de forma privada. La persona iniciará sesión con su usuario.</p>
+            <div class="field-grid">
+              <div class="field"><label class="field-label" for="create-user-name">Nombre completo</label><input id="create-user-name" class="text-input" autocomplete="name" maxlength="120" required></div>
+              <div class="field"><label class="field-label" for="create-user-username">Usuario (3 a 32 caracteres)</label><input id="create-user-username" class="text-input" autocomplete="off" minlength="3" maxlength="32" pattern="[A-Za-z0-9._-]{3,32}" required></div>
+              <div class="field"><label class="field-label" for="create-user-password">Contraseña inicial (8 a 72 caracteres)</label><input id="create-user-password" class="text-input" type="password" autocomplete="new-password" minlength="8" maxlength="72" required></div>
+              <div class="field"><label class="field-label" for="create-user-password-confirm">Confirmar contraseña inicial</label><input id="create-user-password-confirm" class="text-input" type="password" autocomplete="new-password" minlength="8" maxlength="72" required></div>
+              <div class="field"><label class="field-label" for="create-user-role">Perfil</label><select id="create-user-role" class="select-input" required></select></div>
+              <div id="create-user-zone-picker" class="field zone-picker">
+                <span class="field-label">Zonas permitidas</span>
+                <p id="create-user-zone-policy" class="field-hint">Selecciona las zonas que podrá consultar y capturar.</p>
+                <div id="create-user-zones" class="zone-checkboxes"></div>
+              </div>
+            </div>
+            <p id="create-user-message" class="auth-error" role="status" hidden></p>
+            <div class="form-actions"><button class="primary-button" type="submit">Crear cuenta</button></div>
+          </form>
           <form id="invite-user-form" class="form-section invite-user-form">
             <h2>Invitar usuario</h2>
             <p class="field-hint">La persona recibirá un correo para establecer su propia contraseña.</p>
@@ -164,6 +182,6 @@
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </div>
   <script src="config.js"></script>
-  <script src="app.js?v=22"></script>
+  <script src="app.js?v=23"></script>
 </body>
 </html>

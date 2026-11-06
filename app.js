@@ -4,6 +4,7 @@ const SESSION_KEY = 'mym-campo-auth-session';
 const PROFILE_KEY = 'mym-campo-auth-profile';
 const INVITE_PENDING_KEY = 'mym-campo-invite-pending';
 const LOT_LOOKUP_CACHE_KEY = 'mym-campo-lot-lookup:';
+const NO_EMAIL_AUTH_DOMAIN = 'users.mym-campo.invalid';
 const ROLE_OPTIONS = ['aereo', 'terrestre', 'supervisor', 'admin'];
 const modules = {
   clima: { title: 'Clima', subtitle: 'Ubicación y lecturas de las condiciones de campo.', icon: '☀', group: 'aereo', roles: ['aereo'] },
@@ -460,14 +461,16 @@ function showAuthScreen(mode) {
 }
 function userCanOpenModule(key) {
   const module = modules[key];
-  return !!state.user && !!module && (state.user.role === 'admin' || module.roles.includes(state.user.role));
+  if (!state.user || !module) return false;
+  const hasZoneScope = ['admin', 'aereo'].includes(state.user.role) || (state.user.allowedZones || []).length > 0;
+  return hasZoneScope && (state.user.role === 'admin' || module.roles.includes(state.user.role));
 }
 function groupsForRole(role) {
   const groups = [];
-  if (role === 'admin' || role === 'aereo') groups.push({ title: 'Aplicaciones aéreas', keys: Object.keys(modules).filter(key => modules[key].group === 'aereo') });
-  if (role === 'admin' || role === 'terrestre') groups.push({ title: 'Aplicaciones terrestres', keys: Object.keys(modules).filter(key => modules[key].group === 'terrestre') });
-  if (role === 'admin' || role === 'supervisor') groups.push({ title: 'Supervisión', keys: Object.keys(modules).filter(key => modules[key].group === 'supervision') });
-  groups.push({ title: 'Capturas compartidas', keys: Object.keys(modules).filter(key => modules[key].group === 'shared' && (role === 'admin' || modules[key].roles.includes(role))) });
+  if (role === 'admin' || role === 'aereo') groups.push({ title: 'Aplicaciones aéreas', keys: Object.keys(modules).filter(key => modules[key].group === 'aereo' && userCanOpenModule(key)) });
+  if (role === 'admin' || role === 'terrestre') groups.push({ title: 'Aplicaciones terrestres', keys: Object.keys(modules).filter(key => modules[key].group === 'terrestre' && userCanOpenModule(key)) });
+  if (role === 'admin' || role === 'supervisor') groups.push({ title: 'Supervisión', keys: Object.keys(modules).filter(key => modules[key].group === 'supervision' && userCanOpenModule(key)) });
+  groups.push({ title: 'Capturas compartidas', keys: Object.keys(modules).filter(key => modules[key].group === 'shared' && userCanOpenModule(key)) });
   return groups.filter(group => group.keys.length);
 }
 function moduleCard(key) {
@@ -475,7 +478,10 @@ function moduleCard(key) {
   return '<button class="module-card" data-module="' + esc(key) + '" type="button"><span class="module-icon ' + esc(module.group === 'aereo' ? 'flights' : module.group === 'terrestre' ? 'calibration' : module.icon === '✳' ? 'safety' : 'weeds') + '">' + module.icon + '</span><span class="module-copy"><strong>' + esc(module.title) + '</strong><small>' + esc(module.subtitle) + '</small></span><span class="module-arrow">→</span></button>';
 }
 function renderGroups(container) {
-  container.innerHTML = groupsForRole(state.user.role).map(group => '<section class="module-group"><div class="section-heading"><div><p class="eyebrow">' + esc(group.title.toUpperCase()) + '</p><h2>' + esc(group.title) + '</h2></div></div><div class="module-grid">' + group.keys.map(moduleCard).join('') + '</div></section>').join('');
+  const groups = groupsForRole(state.user.role);
+  container.innerHTML = groups.length
+    ? groups.map(group => '<section class="module-group"><div class="section-heading"><div><p class="eyebrow">' + esc(group.title.toUpperCase()) + '</p><h2>' + esc(group.title) + '</h2></div></div><div class="module-grid">' + group.keys.map(moduleCard).join('') + '</div></section>').join('')
+    : 'No tienes zonas asignadas. Contacta a un administrador para solicitar acceso.';
 }
 function fieldMarkup(field, prefix, includeName) {
   const id = prefix + '-' + slug(field.label);
@@ -924,7 +930,7 @@ function captureLocation() {
 }
 function renderUsers(users, zones) {
   $('#users-list').innerHTML = users.slice().sort((a, b) => a.display_name.localeCompare(b.display_name, 'es')).map(user =>
-    '<article class="user-row"><span class="user-avatar">' + esc(initials(user.display_name)) + '</span><span class="user-info"><strong>' + esc(user.display_name) + '</strong><small>' + esc(user.email + ' · ' + user.username + ' · ' + (user.status === 'active' ? 'Activa' : user.status === 'suspended' ? 'Suspendida' : 'Pendiente')) + '</small></span><span class="member-actions"><select class="select-input" data-member-role="' + esc(user.id) + '" data-original-role="' + esc(user.role) + '" aria-label="Perfil para ' + esc(user.display_name) + '">' + ROLE_OPTIONS.map(role => '<option value="' + role + '"' + (user.role === role ? ' selected' : '') + '>' + esc(roleName(role)) + '</option>').join('') + '</select></span><details class="member-zone-picker"' + (['admin', 'aereo'].includes(user.role) ? ' hidden' : '') + '><summary>' + (['admin', 'aereo'].includes(user.role) ? 'Todas las zonas' : 'Zonas permitidas (' + (user.allowed_zones || []).length + ')') + '</summary><div class="zone-checkboxes">' + zones.map(zone => '<label><input type="checkbox" data-member-zone="' + esc(user.id) + '" value="' + esc(zone) + '"' + ((user.allowed_zones || []).includes(zone) ? ' checked' : '') + '> ' + esc(zone) + '</label>').join('') + '</div></details><button class="secondary-button" type="button" data-member-save="' + esc(user.id) + '">Guardar</button></article>'
+    '<article class="user-row"><span class="user-avatar">' + esc(initials(user.display_name)) + '</span><span class="user-info"><strong>' + esc(user.display_name) + '</strong><small>' + esc((user.email || 'Sin correo') + ' · ' + user.username + ' · ' + (user.status === 'active' ? 'Activa' : user.status === 'suspended' ? 'Suspendida' : 'Pendiente')) + '</small></span><span class="member-actions"><select class="select-input" data-member-role="' + esc(user.id) + '" data-original-role="' + esc(user.role) + '" aria-label="Perfil para ' + esc(user.display_name) + '">' + ROLE_OPTIONS.map(role => '<option value="' + role + '"' + (user.role === role ? ' selected' : '') + '>' + esc(roleName(role)) + '</option>').join('') + '</select></span><details class="member-zone-picker"' + (['admin', 'aereo'].includes(user.role) ? ' hidden' : '') + '><summary>' + (['admin', 'aereo'].includes(user.role) ? 'Todas las zonas' : 'Zonas permitidas (' + (user.allowed_zones || []).length + ')') + '</summary><div class="zone-checkboxes">' + zones.map(zone => '<label><input type="checkbox" data-member-zone="' + esc(user.id) + '" value="' + esc(zone) + '"' + ((user.allowed_zones || []).includes(zone) ? ' checked' : '') + '> ' + esc(zone) + '</label>').join('') + '</div></details><button class="secondary-button" type="button" data-member-save="' + esc(user.id) + '">Guardar</button></article>'
   ).join('') || emptyState('Aún no hay cuentas.');
 }
 async function refreshUsers() {
@@ -933,14 +939,28 @@ async function refreshUsers() {
   const zones = await cloudRequest('field_zones?select=zone&order=zone.asc');
   state.zoneOptions = zones.map(item => item.zone);
   updateInviteZoneVisibility();
+  updateCreateUserZoneVisibility();
   renderUsers(users, state.zoneOptions);
 }
 function populateInviteRoles() {
   const select = $('#invite-user-role');
   select.innerHTML = ROLE_OPTIONS.map(role => '<option value="' + esc(role) + '">' + esc(roleName(role)) + '</option>').join('');
 }
+function populateCreateUserRoles() {
+  const select = $('#create-user-role');
+  select.innerHTML = ROLE_OPTIONS.map(role => '<option value="' + esc(role) + '">' + esc(roleName(role)) + '</option>').join('');
+}
 function renderZoneCheckboxes(container, zones, selected, attribute) {
   container.innerHTML = zones.map(zone => '<label><input type="checkbox" ' + attribute + ' value="' + esc(zone) + '"' + (selected.includes(zone) ? ' checked' : '') + '> ' + esc(zone) + '</label>').join('');
+}
+function updateCreateUserZoneVisibility() {
+  const role = $('#create-user-role').value;
+  const unrestricted = ['admin', 'aereo'].includes(role);
+  $('#create-user-zone-picker').hidden = unrestricted;
+  $('#create-user-zone-policy').textContent = unrestricted
+    ? 'Este perfil tiene acceso a todas las zonas.'
+    : 'Selecciona las zonas que podrá consultar y capturar.';
+  renderZoneCheckboxes($('#create-user-zones'), state.zoneOptions, [], 'name="create_allowed_zones"');
 }
 function updateInviteZoneVisibility() {
   const zonePicker = $('#invite-user-zone-picker');
@@ -1008,7 +1028,9 @@ function renderHome() {
   $('.admin-nav').hidden = !isActiveAdmin();
   $('.admin-mobile-nav').hidden = !isActiveAdmin();
   $('#invite-user-form').hidden = !isActiveAdmin();
+  $('#create-user-form').hidden = !isActiveAdmin();
   populateInviteRoles();
+  populateCreateUserRoles();
   $('#home-subtitle').textContent = state.user.role === 'aereo' ? 'Captura vuelos y datos de apoyo para aplicaciones aéreas.' : state.user.role === 'terrestre' ? 'Captura calibraciones y labores de aplicación terrestre.' : state.user.role === 'supervisor' ? 'Revisa capturas y los apartados de Malezas y Calidad.' : 'Administra perfiles y revisa las capturas aéreas y terrestres.';
   refreshLists();
 }
@@ -1115,6 +1137,10 @@ document.addEventListener('click', event => {
   if (moduleButton) { navigate('capturar'); chooseModule(moduleButton.dataset.module); }
 });
 document.addEventListener('change', event => {
+  if (event.target.id === 'create-user-role') {
+    updateCreateUserZoneVisibility();
+    return;
+  }
   if (event.target.id === 'invite-user-role') {
     updateInviteZoneVisibility();
     return;
@@ -1177,7 +1203,8 @@ $('#capture-form').addEventListener('submit', async event => {
 });
 $('#login-form').addEventListener('submit', async event => {
   event.preventDefault();
-  const email = $('#login-email').value.trim().toLowerCase();
+  const identifier = $('#login-email').value.trim().toLowerCase();
+  const email = identifier.includes('@') ? identifier : identifier + '@' + NO_EMAIL_AUTH_DOMAIN;
   const password = $('#login-password').value;
   try {
     const result = await apiRequest('/auth/v1/token?grant_type=password', { method: 'POST', body: { email, password } });
@@ -1187,6 +1214,63 @@ $('#login-form').addEventListener('submit', async event => {
   } catch (error) {
     console.error(error);
     authMessage('login-error', error.message || 'No se pudo iniciar sesión.');
+  }
+});
+$('#create-user-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  if (!form.reportValidity()) return;
+  if ($('#create-user-password').value !== $('#create-user-password-confirm').value) {
+    authMessage('create-user-message', 'Las contraseñas no coinciden.');
+    return;
+  }
+  if (!isActiveAdmin()) {
+    authMessage('create-user-message', 'Solo una cuenta administradora activa puede crear usuarios.');
+    return;
+  }
+  if (!navigator.onLine) {
+    authMessage('create-user-message', 'Conéctate a internet para crear una cuenta.');
+    return;
+  }
+
+  const submitButton = form.querySelector('button[type="submit"]');
+  submitButton.disabled = true;
+  authMessage('create-user-message', '');
+  $('#create-user-message').classList.remove('success-message');
+  let created;
+  try {
+    created = await apiRequest('/functions/v1/create-user', {
+      method: 'POST',
+      token: await accessToken(),
+      body: {
+        username: $('#create-user-username').value.trim().toLowerCase(),
+        display_name: $('#create-user-name').value.trim(),
+        password: $('#create-user-password').value,
+        role: $('#create-user-role').value,
+        allowed_zones: ['admin', 'aereo'].includes($('#create-user-role').value)
+          ? []
+          : $$('input[name="create_allowed_zones"]:checked', $('#create-user-zone-picker')).map(input => input.value)
+      }
+    });
+  } catch (error) {
+    console.error(error);
+    authMessage('create-user-message', error.message || 'No se pudo crear la cuenta.');
+  } finally {
+    $('#create-user-password').value = '';
+    $('#create-user-password-confirm').value = '';
+    submitButton.disabled = false;
+  }
+  if (!created) return;
+
+  form.reset();
+  updateCreateUserZoneVisibility();
+  authMessage('create-user-message', 'Cuenta creada para ' + created.username + '. Entrégale la contraseña inicial de forma privada.');
+  $('#create-user-message').classList.add('success-message');
+  try {
+    await refreshUsers();
+  } catch (error) {
+    console.error(error);
+    authMessage('create-user-message', 'La cuenta se creó, pero no se pudo actualizar la lista de usuarios.');
   }
 });
 $('#signup-form').addEventListener('submit', async event => {

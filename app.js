@@ -1149,13 +1149,23 @@ document.addEventListener('change', event => {
   const userRow = event.target.closest('.user-row');
   const zonePicker = $('.member-zone-picker', userRow);
   const unrestricted = ['admin', 'aereo'].includes(event.target.value);
-  if (['admin', 'aereo'].includes(event.target.dataset.originalRole) && !unrestricted) {
+  const previousRole = event.target.dataset.originalRole;
+  if (['admin', 'aereo'].includes(previousRole) && !unrestricted) {
     $$('[data-member-zone]', userRow).forEach(input => { input.checked = false; });
   }
   zonePicker.hidden = unrestricted;
   zonePicker.querySelector('summary').textContent = unrestricted
     ? 'Todas las zonas'
     : 'Zonas permitidas (' + $$('[data-member-zone]:checked', userRow).length + ')';
+  event.target.dataset.originalRole = event.target.value;
+});
+document.addEventListener('change', event => {
+  if (!event.target.matches('[data-member-zone]')) return;
+  const userRow = event.target.closest('.user-row');
+  const roleSelect = $('[data-member-role]', userRow);
+  if (['admin', 'aereo'].includes(roleSelect.value)) return;
+  $('.member-zone-picker summary', userRow).textContent =
+    'Zonas permitidas (' + $$('[data-member-zone]:checked', userRow).length + ')';
 });
 $('#capture-form').addEventListener('input', event => {
   if (event.target.matches('[data-lot-lookup]')) updateLotLocations($('#form-fields'));
@@ -1451,12 +1461,12 @@ window.addEventListener('online', () => {
 window.addEventListener('offline', updateConnection);
 async function init() {
   try {
-    state.db = await openDb();
     try { state.configured = !!supabaseConfig(); }
     catch (error) {
       state.configured = false;
       $('#auth-config-warning small').textContent = error.message;
     }
+    state.db = await openDb();
     const acceptingInvite = consumeInviteLink() || localStorage.getItem(INVITE_PENDING_KEY) === 'true';
     state.acceptingInvite = acceptingInvite;
     const session = localStorage.getItem(SESSION_KEY);

@@ -3,6 +3,7 @@ const DB_VERSION = 2;
 const SESSION_KEY = 'mym-campo-auth-session';
 const PROFILE_KEY = 'mym-campo-auth-profile';
 const INVITE_PENDING_KEY = 'mym-campo-invite-pending';
+const LOT_LOOKUP_CACHE_KEY = 'mym-campo-lot-lookup:';
 const ROLE_OPTIONS = ['aereo', 'terrestre', 'supervisor', 'admin'];
 const modules = {
   clima: { title: 'Clima', subtitle: 'Ubicación y lecturas de las condiciones de campo.', icon: '☀', group: 'aereo', roles: ['aereo'] },
@@ -201,16 +202,30 @@ const childSchemas = {
 };
 const $ = (selector, root) => (root || document).querySelector(selector);
 const $$ = (selector, root) => [...(root || document).querySelectorAll(selector)];
-const state = { db: null, user: null, authSession: null, configured: false, syncConnected: false, syncBusy: false, refreshPromise: null, currentModule: null, recordTimeTimer: null, lotLookup: Object.create(null), acceptingInvite: false };
+const state = { db: null, user: null, authSession: null, configured: false, syncConnected: false, syncBusy: false, refreshPromise: null, currentModule: null, recordTimeTimer: null, lotLookup: Object.create(null), zoneOptions: [], acceptingInvite: false };
 
 async function loadLotLookup() {
+  const scopeKey = [state.user.role, ...(state.user.allowedZones || []).slice().sort()].join(':');
+  const cacheKey = LOT_LOOKUP_CACHE_KEY + state.user.id + ':' + encodeURIComponent(scopeKey);
   try {
-    const response = await fetch('./data/lotes.json');
-    if (!response.ok) throw new Error('No se pudo cargar el catálogo de lotes.');
-    state.lotLookup = await response.json();
-  } catch (error) {
+    if (!navigator.onLine) throw new Error('Sin conexión: se usará la lista de lotes guardada para esta cuenta.');
+    const lots = [];
+    for (let offset = 0, page; ; offset += 1000) {
+      page = await cloudRequest('field_lots?select=lot_code,zone,finca&order=lot_code.asc&limit=1000&offset=' + offset);
+      lots.push(...page);
+      if (page.length < 1000) break;
+    }
     state.lotLookup = Object.create(null);
-    console.warn('La búsqueda de finca y zona por lote no está disponible.', error);
+    for (const lot of lots) state.lotLookup[lot.lot_code] = { zona: lot.zone, finca: lot.finca };
+    localStorage.setItem(cacheKey, JSON.stringify(state.lotLookup));
+  } catch (error) {
+    try {
+      state.lotLookup = JSON.parse(localStorage.getItem(cacheKey) || '{}');
+    } catch (cacheError) {
+      state.lotLookup = Object.create(null);
+      console.warn('No se pudo abrir la lista de lotes guardada para esta cuenta.', cacheError);
+    }
+    console.warn('No se pudo actualizar la lista de lotes autorizados; se usará la copia local si existe.', error);
   }
 }
 
@@ -288,7 +303,7 @@ function saveAuthSession(session) {
   localStorage.setItem(SESSION_KEY, JSON.stringify(session));
 }
 function normalizeProfile(profile) {
-  return { id: profile.id, email: profile.email, username: profile.username, displayName: profile.display_name, role: profile.role, status: profile.status };
+  return { id: profile.id, email: profile.email, username: profile.username, displayName: profile.display_name, role: profile.role, status: profile.status, allowedZones: Array.isArray(profile.allowed_zones) ? profile.allowed_zones : [] };
 }
 function saveProfile(profile) {
   state.user = profile;
@@ -315,7 +330,7 @@ async function cloudRequest(path, options) {
   return apiRequest('/rest/v1/' + path, { ...options, token: await accessToken() });
 }
 async function fetchProfile(userId) {
-  const rows = await cloudRequest('profiles?id=eq.' + encodeURIComponent(userId) + '&select=id,email,username,display_name,role,status');
+  const rows = await cloudRequest('profiles?id=eq.' + encodeURIComponent(userId) + '&select=id,email,username,display_name,role,status,allowed_zones');
   if (!Array.isArray(rows) || !rows.length) throw new Error('No se encontró el perfil de esta cuenta en el espacio compartido.');
   return normalizeProfile(rows[0]);
 }
@@ -494,8 +509,7 @@ function fieldMarkup(field, prefix, includeName) {
 }
 function commonFields(withLotLookup) {
   const lotLookup = !!withLotLookup;
-  const knownFarms = ['CAMANTULUL', 'CAÑAVERALES', 'MIXQUEÑO', 'PETEN', 'CONCEPCIÓN LA NORIA', 'EL RECREO', 'LIMONES', 'TESALIA', 'LAS FLORES MT', 'HORIZONTES'];
-  const farmOptions = [...new Set([...knownFarms, ...Object.values(state.lotLookup).map(location => location.finca).filter(Boolean)])].sort();
+  const farmOptions = [...new Set(Object.values(state.lotLookup).map(location => location.finca).filter(Boolean))].sort();
   return '<section class="form-section"><h2>Datos de la actividad</h2><div class="field-grid">' +
     fieldMarkup({ label: 'Fecha', name: 'fecha', type: 'date', value: localDate(), required: true }, 'f-date', true) +
     fieldMarkup({ label: 'Responsable', name: 'responsable', value: state.user.displayName, required: true }, 'f-user', true) +
@@ -536,7 +550,7 @@ function updateLotLocations(form) {
   const missing = matches.find(match => !match.location);
   if (missing) {
     clearAutoLocation(targets);
-    status.textContent = 'El lote ' + missing.lot + ' no aparece en la pestaña Lotes; finca y zona no se completaron.';
+    status.textContent = 'El lote ' + missing.lot + ' no está disponible para esta cuenta; verifica el código y la zona asignada.';
     return;
   }
   const locations = new Map(matches.map(match => [match.location.zona + '|' + match.location.finca, match.location]));
@@ -868,7 +882,7 @@ function recordRow(record) {
 function emptyState(message) { return '<div class="empty-state">' + esc(message) + '</div>'; }
 async function refreshLists() {
   if (!state.db || !state.user) return;
-  let records = (await getRecords()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  let records = (await getRecords()).filter(recordHasLotAccess).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   if (!['admin', 'supervisor'].includes(state.user.role)) records = records.filter(record => record.ownerUsername === state.user.username);
   const pending = records.filter(record => record.syncStatus === 'pending');
   $('#pending-badge').textContent = pending.length;
@@ -908,19 +922,82 @@ function captureLocation() {
     button.disabled = false;
   }, { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
 }
-function renderUsers(users) {
+function renderUsers(users, zones) {
   $('#users-list').innerHTML = users.slice().sort((a, b) => a.display_name.localeCompare(b.display_name, 'es')).map(user =>
-    '<article class="user-row"><span class="user-avatar">' + esc(initials(user.display_name)) + '</span><span class="user-info"><strong>' + esc(user.display_name) + '</strong><small>' + esc(user.email + ' · ' + user.username + ' · ' + (user.status === 'active' ? 'Activa' : user.status === 'suspended' ? 'Suspendida' : 'Pendiente')) + '</small></span><span class="user-role">' + esc(roleName(user.role)) + '</span><span class="member-actions"><select class="select-input" data-member-role="' + esc(user.id) + '" aria-label="Perfil para ' + esc(user.display_name) + '">' + ROLE_OPTIONS.map(role => '<option value="' + role + '"' + (user.role === role ? ' selected' : '') + '>' + esc(roleName(role)) + '</option>').join('') + '</select><button class="secondary-button" type="button" data-member-save="' + esc(user.id) + '">Guardar perfil</button></span></article>'
+    '<article class="user-row"><span class="user-avatar">' + esc(initials(user.display_name)) + '</span><span class="user-info"><strong>' + esc(user.display_name) + '</strong><small>' + esc(user.email + ' · ' + user.username + ' · ' + (user.status === 'active' ? 'Activa' : user.status === 'suspended' ? 'Suspendida' : 'Pendiente')) + '</small></span><span class="member-actions"><select class="select-input" data-member-role="' + esc(user.id) + '" data-original-role="' + esc(user.role) + '" aria-label="Perfil para ' + esc(user.display_name) + '">' + ROLE_OPTIONS.map(role => '<option value="' + role + '"' + (user.role === role ? ' selected' : '') + '>' + esc(roleName(role)) + '</option>').join('') + '</select></span><details class="member-zone-picker"' + (['admin', 'aereo'].includes(user.role) ? ' hidden' : '') + '><summary>' + (['admin', 'aereo'].includes(user.role) ? 'Todas las zonas' : 'Zonas permitidas (' + (user.allowed_zones || []).length + ')') + '</summary><div class="zone-checkboxes">' + zones.map(zone => '<label><input type="checkbox" data-member-zone="' + esc(user.id) + '" value="' + esc(zone) + '"' + ((user.allowed_zones || []).includes(zone) ? ' checked' : '') + '> ' + esc(zone) + '</label>').join('') + '</div></details><button class="secondary-button" type="button" data-member-save="' + esc(user.id) + '">Guardar</button></article>'
   ).join('') || emptyState('Aún no hay cuentas.');
 }
 async function refreshUsers() {
   if (!isActiveAdmin()) return;
-  const users = await cloudRequest('profiles?select=id,email,username,display_name,role,status&order=created_at.asc');
-  renderUsers(users);
+  const users = await cloudRequest('profiles?select=id,email,username,display_name,role,status,allowed_zones&order=created_at.asc');
+  const zones = await cloudRequest('field_zones?select=zone&order=zone.asc');
+  state.zoneOptions = zones.map(item => item.zone);
+  updateInviteZoneVisibility();
+  renderUsers(users, state.zoneOptions);
 }
 function populateInviteRoles() {
   const select = $('#invite-user-role');
   select.innerHTML = ROLE_OPTIONS.map(role => '<option value="' + esc(role) + '">' + esc(roleName(role)) + '</option>').join('');
+}
+function renderZoneCheckboxes(container, zones, selected, attribute) {
+  container.innerHTML = zones.map(zone => '<label><input type="checkbox" ' + attribute + ' value="' + esc(zone) + '"' + (selected.includes(zone) ? ' checked' : '') + '> ' + esc(zone) + '</label>').join('');
+}
+function updateInviteZoneVisibility() {
+  const zonePicker = $('#invite-user-zone-picker');
+  const role = $('#invite-user-role').value;
+  const unrestricted = ['admin', 'aereo'].includes(role);
+  zonePicker.hidden = unrestricted;
+  $('#invite-zone-policy').textContent = unrestricted
+    ? 'Este perfil tiene acceso a todas las zonas.'
+    : 'Selecciona las zonas que podrá consultar y capturar.';
+  renderZoneCheckboxes($('#invite-user-zones'), state.zoneOptions, [], 'name="allowed_zones"');
+}
+function userCanAccessLot(lotCode) {
+  const lot = state.lotLookup[lotCode];
+  if (!lot || !state.user) return false;
+  return userCanAccessZone(lot.zona);
+}
+function userCanAccessZone(zone) {
+  if (!state.user) return false;
+  return ['admin', 'aereo'].includes(state.user.role) || (state.user.allowedZones || []).includes(String(zone));
+}
+function invalidLotsInForm(form) {
+  const invalidLots = [...form.querySelectorAll('[data-lot-lookup]')]
+    .map(input => String(input.value || '').trim())
+    .filter(Boolean)
+    .filter(lot => !userCanAccessLot(lot));
+  const invalidZones = [...form.querySelectorAll('[name="zona"], [name="ZONA"]')]
+    .map(input => String(input.value || '').trim())
+    .filter(Boolean)
+    .filter(zone => !userCanAccessZone(zone));
+  return [...new Set([...invalidLots, ...invalidZones])];
+}
+function recordHasLotAccess(record) {
+  if (!state.user || !record || !record.datos) return false;
+  if (['admin', 'aereo'].includes(state.user.role)) return true;
+  const lotCodes = [];
+  const zones = [];
+  const lotKey = /^(id[\s_]*lote|lote)(\s+\d+)?$/i;
+  const visit = value => {
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (!value || typeof value !== 'object') return;
+    for (const [key, child] of Object.entries(value)) {
+      if (lotKey.test(key) && (typeof child === 'string' || typeof child === 'number')) {
+        const code = String(child).trim();
+        if (code) lotCodes.push(code);
+      } else if (/^(zona|zone)$/i.test(key) && (typeof child === 'string' || typeof child === 'number')) {
+        const zone = String(child).trim();
+        if (zone) zones.push(zone);
+      } else {
+        visit(child);
+      }
+    }
+  };
+  visit(record.datos);
+  return lotCodes.every(userCanAccessLot) && zones.every(userCanAccessZone);
 }
 function renderHome() {
   renderGroups($('#module-groups'));
@@ -981,6 +1058,7 @@ async function startSession(user, session) {
     showAuthScreen('pending');
     return;
   }
+  await loadLotLookup();
   state.syncConnected = false;
   $('#auth-screen').hidden = true;
   $('#app-shell').hidden = false;
@@ -1036,6 +1114,23 @@ document.addEventListener('click', event => {
   const moduleButton = event.target.closest('[data-module]');
   if (moduleButton) { navigate('capturar'); chooseModule(moduleButton.dataset.module); }
 });
+document.addEventListener('change', event => {
+  if (event.target.id === 'invite-user-role') {
+    updateInviteZoneVisibility();
+    return;
+  }
+  if (!event.target.matches('[data-member-role]')) return;
+  const userRow = event.target.closest('.user-row');
+  const zonePicker = $('.member-zone-picker', userRow);
+  const unrestricted = ['admin', 'aereo'].includes(event.target.value);
+  if (['admin', 'aereo'].includes(event.target.dataset.originalRole) && !unrestricted) {
+    $$('[data-member-zone]', userRow).forEach(input => { input.checked = false; });
+  }
+  zonePicker.hidden = unrestricted;
+  zonePicker.querySelector('summary').textContent = unrestricted
+    ? 'Todas las zonas'
+    : 'Zonas permitidas (' + $$('[data-member-zone]:checked', userRow).length + ')';
+});
 $('#capture-form').addEventListener('input', event => {
   if (event.target.matches('[data-lot-lookup]')) updateLotLocations($('#form-fields'));
   if (event.target.matches('[data-farm-selector]')) updateZoneFromFarm($('#form-fields'));
@@ -1052,6 +1147,11 @@ $('#capture-form').addEventListener('submit', async event => {
   event.preventDefault();
   const form = event.currentTarget;
   if (!form.reportValidity()) return;
+  const unauthorizedLots = invalidLotsInForm(form);
+  if (unauthorizedLots.length) {
+    toast('Sin acceso a los lotes: ' + unauthorizedLots.join(', '));
+    return;
+  }
   if (state.currentModule === 'clima' && !$$('.repeat-row', $('#weather-rows')).length) { toast('Agrega por lo menos una lectura de clima.'); return; }
   const createdAt = new Date().toISOString();
   const recordId = crypto.randomUUID();
@@ -1179,11 +1279,15 @@ $('#invite-user-form').addEventListener('submit', async event => {
         email: $('#invite-user-email').value.trim().toLowerCase(),
         username: $('#invite-user-username').value.trim().toLowerCase(),
         display_name: $('#invite-user-name').value.trim(),
-        role: $('#invite-user-role').value
+        role: $('#invite-user-role').value,
+        allowed_zones: ['admin', 'aereo'].includes($('#invite-user-role').value)
+          ? []
+          : $$('input[name="allowed_zones"]:checked', $('#invite-user-zone-picker')).map(input => input.value)
       }
     });
     invitationSent = true;
     form.reset();
+    updateInviteZoneVisibility();
     authMessage('invite-user-message', 'Invitación enviada a ' + invitation.email + '. La persona establecerá su contraseña desde el correo.');
     $('#invite-user-message').classList.add('success-message');
   } catch (error) {
@@ -1202,9 +1306,14 @@ $('#invite-user-form').addEventListener('submit', async event => {
 });
 async function saveMemberRole(userId) {
   if (!isActiveAdmin()) throw new Error('Solo un administrador activo puede asignar perfiles.');
-  const select = $$('[data-member-role]').find(item => item.dataset.memberRole === userId);
-  if (!select) throw new Error('No se encontró el perfil seleccionado.');
-  await cloudRequest('rpc/set_member_role', { method: 'POST', body: { p_user_id: userId, p_role: select.value } });
+  const roleSelect = $$('[data-member-role]').find(item => item.dataset.memberRole === userId);
+  if (!roleSelect) throw new Error('No se encontró el perfil seleccionado.');
+  const zones = ['admin', 'aereo'].includes(roleSelect.value) ? [] :
+    $$('[data-member-zone]').filter(input => input.dataset.memberZone === userId && input.checked).map(input => input.value);
+  await cloudRequest('rpc/set_member_access', {
+    method: 'POST',
+    body: { p_user_id: userId, p_role: roleSelect.value, p_allowed_zones: zones }
+  });
   authMessage('user-create-message', 'Perfil actualizado.');
   $('#user-create-message').classList.add('success-message');
   await refreshUsers();
@@ -1233,7 +1342,8 @@ $('#check-access').addEventListener('click', async () => {
 $('#pending-logout').addEventListener('click', endSession);
 $('#record-search').addEventListener('input', refreshLists);
 function visibleLocalRecords(records) {
-  return ['admin', 'supervisor'].includes(state.user.role) ? records : records.filter(record => record.ownerUsername === state.user.username);
+  const scoped = records.filter(recordHasLotAccess);
+  return ['admin', 'supervisor'].includes(state.user.role) ? scoped : scoped.filter(record => record.ownerUsername === state.user.username);
 }
 $('#import-local').addEventListener('click', async () => {
   try {

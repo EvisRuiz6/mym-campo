@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#174b38">
   <meta name="description" content="Captura de labores aéreas y terrestres para MyM Data">
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="app.css?v=15">
+  <link rel="stylesheet" href="app.css?v=16">
   <title>MyM Campo</title>
 </head>
 <body>
@@ -147,6 +147,11 @@
               <div class="field"><label class="field-label" for="invite-user-username">Usuario (3 a 32 caracteres)</label><input id="invite-user-username" class="text-input" autocomplete="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9._-]{3,32}" required></div>
               <div class="field"><label class="field-label" for="invite-user-email">Correo</label><input id="invite-user-email" class="text-input" type="email" autocomplete="email" maxlength="254" required></div>
               <div class="field"><label class="field-label" for="invite-user-role">Perfil</label><select id="invite-user-role" class="select-input" required></select></div>
+              <div id="invite-user-zone-picker" class="field zone-picker">
+                <span class="field-label">Zonas permitidas</span>
+                <p id="invite-zone-policy" class="field-hint">Selecciona las zonas que podrá consultar y capturar.</p>
+                <div id="invite-user-zones" class="zone-checkboxes"></div>
+              </div>
             </div>
             <p id="invite-user-message" class="auth-error" role="status" hidden></p>
             <div class="form-actions"><button class="primary-button" type="submit">Enviar invitación</button></div>
@@ -159,6 +164,6 @@
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </div>
   <script src="config.js"></script>
-  <script src="app.js?v=21"></script>
+  <script src="app.js?v=22"></script>
 </body>
 </html>

@@ -1,5 +1,5 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
-import { validateInvitation } from '../_shared/invitation.mjs';
+import { validateInvitation, zonesForRole } from '../_shared/invitation.mjs';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -61,6 +61,19 @@ Deno.serve(async request => {
     return respond(403, { message: 'Solo una cuenta administradora activa puede invitar usuarios.' });
   }
 
+  const { data: zones, error: zonesError } = await adminClient.from('field_zones').select('zone');
+  if (zonesError) {
+    console.error('No se pudieron comprobar las zonas permitidas.', zonesError);
+    return respond(500, { message: 'No se pudieron verificar las zonas configuradas.' });
+  }
+  const allZones = (zones || []).map(item => item.zone);
+  let allowedZones: string[];
+  try {
+    allowedZones = zonesForRole(invitation.role, invitation.allowed_zones, allZones);
+  } catch (error) {
+    return respond(400, { message: error instanceof Error ? error.message : 'La selección de zonas no es válida.' });
+  }
+
   const { data: inviteData, error: inviteError } = await adminClient.auth.admin.inviteUserByEmail(
     invitation.email,
     {
@@ -74,7 +87,7 @@ Deno.serve(async request => {
 
   const { data: profile, error: updateError } = await adminClient
     .from('profiles')
-    .update({ role: invitation.role, status: 'active' })
+    .update({ role: invitation.role, status: 'active', allowed_zones: allowedZones })
     .eq('id', inviteData.user.id)
     .select('id')
     .maybeSingle();

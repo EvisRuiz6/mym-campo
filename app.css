@@ -178,6 +178,10 @@ dialog::backdrop { background: #17241c88; }
   .record-toolbar .secondary-button { width: 100%; }
   .record-status { font-size: 9px; }
   .page .section-heading { align-items: end; }
+  .user-row { flex-wrap: wrap; }
+  .user-info { flex: 1 1 calc(100% - 55px); }
+  .member-actions { flex: 1; }
+  .member-actions .select-input { min-width: 0; width: 100%; }
 }
 
 /* Offline account gate and role-based sections */
@@ -222,6 +226,13 @@ dialog::backdrop { background: #17241c88; }
 .invite-user-form .field-hint { margin: 0 0 15px; }
 .invite-user-form .form-actions { margin-top: 16px; }
 .invite-user-form button:disabled { opacity: .65; cursor: wait; }
+.zone-picker { grid-column: 1 / -1; }
+.zone-checkboxes { display: flex; flex-wrap: wrap; gap: 8px 14px; }
+.zone-checkboxes label { display: inline-flex; align-items: center; gap: 5px; color: #394a3e; font-size: 11px; }
+.zone-checkboxes input { accent-color: var(--forest); }
+.member-zone-picker { flex: 1 1 100%; padding: 2px 3px; color: var(--forest); font-size: 11px; }
+.member-zone-picker summary { cursor: pointer; }
+.member-zone-picker .zone-checkboxes { margin-top: 8px; }
 .user-row { display: flex; align-items: center; gap: 11px; padding: 12px 2px; border-bottom: 1px solid var(--line); }
 .user-avatar { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; flex: 0 0 34px; background: #e8f1e9; color: var(--forest); font-size: 11px; font-weight: 700; }
 .user-info { flex: 1; min-width: 0; }

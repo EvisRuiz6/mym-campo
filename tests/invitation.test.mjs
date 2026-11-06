@@ -1,6 +1,41 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateInvitation, zonesForRole } from '../supabase/functions/_shared/invitation.mjs';
+import {
+  noEmailAuthAddress,
+  validateInvitation,
+  validateUserCreation,
+  zonesForRole
+} from '../supabase/functions/_shared/invitation.mjs';
+
+test('normalizes and validates a username-only account', () => {
+  assert.deepEqual(validateUserCreation({
+    username: ' Campo.User ',
+    display_name: '  Usuario de campo  ',
+    role: 'supervisor',
+    password: 'clave-segura-123',
+    allowed_zones: [' 1 ', '3', '1']
+  }), {
+    username: 'campo.user',
+    display_name: 'Usuario de campo',
+    role: 'supervisor',
+    password: 'clave-segura-123',
+    allowed_zones: ['1', '3']
+  });
+  assert.equal(noEmailAuthAddress('campo.user'), 'campo.user@users.mym-campo.invalid');
+});
+
+test('rejects invalid username-only account data', () => {
+  for (const body of [
+    { username: 'x!', display_name: 'Nombre', role: 'aereo', password: '12345678' },
+    { username: 'campo', display_name: ' ', role: 'aereo', password: '12345678' },
+    { username: 'campo', display_name: 'Nombre', role: 'owner', password: '12345678' },
+    { username: 'campo', display_name: 'Nombre', role: 'aereo', password: '1234567' },
+    { username: 'campo', display_name: 'Nombre', role: 'aereo', password: '12345678', allowed_zones: ['?'] },
+    { username: 'campo', display_name: 'Nombre', role: 'terrestre', password: '12345678', allowed_zones: ['1'], email: 'unexpected@example.com' }
+  ]) {
+    assert.throws(() => validateUserCreation(body));
+  }
+});
 
 test('normalizes and returns a valid invitation', () => {
   assert.deepEqual(validateInvitation({
@@ -24,6 +59,7 @@ test('rejects invalid email, username, name, and role', () => {
     { email: 'user@example.com', username: 'x!', display_name: 'Nombre', role: 'aereo' },
     { email: 'user@example.com', username: 'campo', display_name: ' ', role: 'aereo' },
     { email: 'user@example.com', username: 'campo', display_name: 'Nombre', role: 'owner' },
+    { email: 'campo@users.mym-campo.invalid', username: 'campo', display_name: 'Nombre', role: 'aereo' },
     { email: 'user@example.com', username: 'campo', display_name: 'Nombre', role: 'aereo', allowed_zones: '1' },
     { email: 'user@example.com', username: 'campo', display_name: 'Nombre', role: 'aereo', allowed_zones: ['?'] }
   ]) {

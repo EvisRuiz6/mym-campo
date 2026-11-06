@@ -929,9 +929,10 @@ function renderUsers(users, zones) {
 }
 async function refreshUsers() {
   if (!isActiveAdmin()) return;
+  if (!state.zoneOptions.length) await loadZoneOptions();
   const users = await cloudRequest('profiles?select=id,email,username,display_name,role,status,allowed_zones&order=created_at.asc');
-  const zones = await cloudRequest('field_zones?select=zone&order=zone.asc');
-  state.zoneOptions = zones.map(item => item.zone);
+  const zones = state.zoneOptions.length ? state.zoneOptions : (await cloudRequest('field_zones?select=zone&order=zone.asc')).map(item => item.zone);
+  state.zoneOptions = zones.map(item => String(item).trim()).filter(Boolean);
   updateInviteZoneVisibility();
   renderUsers(users, state.zoneOptions);
 }
@@ -999,6 +1000,16 @@ function recordHasLotAccess(record) {
   visit(record.datos);
   return lotCodes.every(userCanAccessLot) && zones.every(userCanAccessZone);
 }
+async function loadZoneOptions() {
+  if (!state.configured || !state.user) return;
+  try {
+    const zones = await cloudRequest('field_zones?select=zone&order=zone.asc');
+    state.zoneOptions = Array.isArray(zones) ? zones.map(item => String(item.zone).trim()).filter(Boolean) : [];
+  } catch (error) {
+    console.warn('No se pudieron cargar las zonas configuradas para la asignación de usuarios.', error);
+    state.zoneOptions = [];
+  }
+}
 function renderHome() {
   renderGroups($('#module-groups'));
   renderGroups($('#module-picker'));
@@ -1009,6 +1020,7 @@ function renderHome() {
   $('.admin-mobile-nav').hidden = !isActiveAdmin();
   $('#invite-user-form').hidden = !isActiveAdmin();
   populateInviteRoles();
+  loadZoneOptions().then(() => updateInviteZoneVisibility()).catch(() => updateInviteZoneVisibility());
   $('#home-subtitle').textContent = state.user.role === 'aereo' ? 'Captura vuelos y datos de apoyo para aplicaciones aéreas.' : state.user.role === 'terrestre' ? 'Captura calibraciones y labores de aplicación terrestre.' : state.user.role === 'supervisor' ? 'Revisa capturas y los apartados de Malezas y Calidad.' : 'Administra perfiles y revisa las capturas aéreas y terrestres.';
   refreshLists();
 }

@@ -1,0 +1,14 @@
+{
+  "name": "MyM Campo",
+  "short_name": "MyM Campo",
+  "description": "Captura offline de aplicaciones aéreas y terrestres para MyM Data",
+  "lang": "es-GT",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f7f9f6",
+  "theme_color": "#174b38",
+  "icons": [
+    { "src": "icon.svg", "sizes": "192x192", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

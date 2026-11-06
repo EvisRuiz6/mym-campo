@@ -6,7 +6,7 @@ export function noEmailAuthAddress(username) {
 }
 
 export async function fetchLotZones(client) {
-  const zones = new Set();
+  const lots = [];
   for (let offset = 0; ; offset += 1000) {
     const { data, error } = await client
       .from('field_lots')
@@ -14,10 +14,10 @@ export async function fetchLotZones(client) {
       .order('lot_code')
       .range(offset, offset + 999);
     if (error) throw error;
-    for (const lot of data || []) zones.add(lot.zone);
+    lots.push(...(data || []));
     if (!data || data.length < 1000) break;
   }
-  return [...zones].sort();
+  return zonesFromLots(lots);
 }
 
 export function validateUserCreation(body) {
@@ -102,4 +102,9 @@ export function zonesForRole(role, requestedZones, configuredZones) {
   return ['admin', 'aereo'].includes(role)
     ? allZones
     : [...new Set(requestedZones)];
+}
+
+export function zonesFromLots(lots) {
+  return [...new Set(lots.map(lot => lot.zone).filter(zone => typeof zone === 'string' && zone.length > 0))]
+    .sort((a, b) => a.localeCompare(b, 'es'));
 }

@@ -5,7 +5,8 @@ import {
   noEmailAuthAddress,
   validateInvitation,
   validateUserCreation,
-  zonesForRole
+  zonesForRole,
+  zonesFromLots
 } from '../supabase/functions/_shared/invitation.mjs';
 
 test('loads unique zones from every page of actual lots', async () => {
@@ -115,4 +116,17 @@ test('grants all zones to admin and aerial roles and only assigned zones to othe
   assert.deepEqual(zonesForRole('supervisor', ['3'], configured), ['3']);
   assert.deepEqual(zonesForRole('terrestre', [], configured), []);
   assert.throws(() => zonesForRole('supervisor', ['unknown'], configured));
+});
+
+test('derives distinct allowed zones from lot records', () => {
+  const zones = zonesFromLots([
+    { zone: '3' },
+    { zone: '1' },
+    { zone: '3' },
+    { zone: 'INAFEB' },
+    { zone: '' }
+  ]);
+  assert.deepEqual(zones, ['1', '3', 'INAFEB']);
+  assert.deepEqual(zonesForRole('admin', [], zones), zones);
+  assert.throws(() => zonesForRole('supervisor', ['4'], zones));
 });

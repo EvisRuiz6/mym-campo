@@ -942,7 +942,7 @@ async function refreshUsers() {
     for (const lot of lots) zones.add(lot.zone);
     if (lots.length < 1000) break;
   }
-  state.zoneOptions = [...zones];
+  state.zoneOptions = [...zones].sort((a, b) => a.localeCompare(b, 'es'));
   updateInviteZoneVisibility();
   updateCreateUserZoneVisibility();
   renderUsers(users, state.zoneOptions);

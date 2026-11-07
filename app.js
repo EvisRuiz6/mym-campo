@@ -203,11 +203,14 @@ const childSchemas = {
 };
 const $ = (selector, root) => (root || document).querySelector(selector);
 const $$ = (selector, root) => [...(root || document).querySelectorAll(selector)];
-const state = { db: null, user: null, authSession: null, configured: false, syncConnected: false, syncBusy: false, refreshPromise: null, currentModule: null, recordTimeTimer: null, lotLookup: Object.create(null), zoneOptions: [], acceptingInvite: false };
+const state = { db: null, user: null, authSession: null, configured: false, syncConnected: false, syncBusy: false, refreshPromise: null, currentModule: null, recordTimeTimer: null, lotLookup: Object.create(null), lotLookupRequests: new Map(), zoneOptions: [], acceptingInvite: false };
 
-async function loadLotLookup() {
+function lotLookupCacheKey() {
   const scopeKey = [state.user.role, ...(state.user.allowedZones || []).slice().sort()].join(':');
-  const cacheKey = LOT_LOOKUP_CACHE_KEY + state.user.id + ':' + encodeURIComponent(scopeKey);
+  return LOT_LOOKUP_CACHE_KEY + state.user.id + ':' + encodeURIComponent(scopeKey);
+}
+async function loadLotLookup() {
+  const cacheKey = lotLookupCacheKey();
   try {
     if (!navigator.onLine) throw new Error('Sin conexión: se usará la lista de lotes guardada para esta cuenta.');
     const lots = [];
@@ -217,7 +220,13 @@ async function loadLotLookup() {
       if (page.length < 1000) break;
     }
     state.lotLookup = Object.create(null);
-    for (const lot of lots) state.lotLookup[lot.lot_code] = { zona: lot.zone, finca: lot.finca };
+    for (const lot of lots) {
+      const lotCode = String(lot.lot_code || '').trim();
+      const zone = normalizeZoneValue(lot.zone);
+      const finca = String(lot.finca || '').trim();
+      if (!lotCode) continue;
+      state.lotLookup[lotCode] = { zona: zone, finca };
+    }
     localStorage.setItem(cacheKey, JSON.stringify(state.lotLookup));
   } catch (error) {
     try {
@@ -228,6 +237,28 @@ async function loadLotLookup() {
     }
     console.warn('No se pudo actualizar la lista de lotes autorizados; se usará la copia local si existe.', error);
   }
+}
+async function refreshLotLookupEntry(lotCode) {
+  if (state.lotLookup[lotCode]) return true;
+  if (!navigator.onLine || !state.user) return false;
+  const requestKey = state.user.id + ':' + lotCode;
+  if (state.lotLookupRequests.has(requestKey)) return state.lotLookupRequests.get(requestKey);
+  const userId = state.user.id;
+  const request = cloudRequest('field_lots?select=lot_code,zone,finca&lot_code=eq.' + encodeURIComponent(lotCode) + '&limit=1')
+    .then(rows => {
+      const lot = Array.isArray(rows) ? rows[0] : null;
+      if (!lot || !state.user || state.user.id !== userId) return false;
+      state.lotLookup[lot.lot_code] = { zona: lot.zone, finca: lot.finca };
+      try {
+        localStorage.setItem(lotLookupCacheKey(), JSON.stringify(state.lotLookup));
+      } catch (error) {
+        console.warn('No se pudo guardar el lote verificado para uso sin conexión.', error);
+      }
+      return true;
+    })
+    .finally(() => state.lotLookupRequests.delete(requestKey));
+  state.lotLookupRequests.set(requestKey, request);
+  return request;
 }
 
 function localDate() {
@@ -304,7 +335,21 @@ function saveAuthSession(session) {
   localStorage.setItem(SESSION_KEY, JSON.stringify(session));
 }
 function normalizeProfile(profile) {
-  return { id: profile.id, email: profile.email, username: profile.username, displayName: profile.display_name, role: profile.role, status: profile.status, allowedZones: Array.isArray(profile.allowed_zones) ? profile.allowed_zones : [] };
+  return {
+    id: profile.id,
+    email: profile.email,
+    username: profile.username,
+    displayName: profile.display_name,
+    role: profile.role,
+    status: profile.status,
+    allowedZones: normalizeZoneList(profile.allowed_zones)
+  };
+}
+function normalizeZoneValue(value) {
+  return String(value == null ? '' : value).trim();
+}
+function normalizeZoneList(values) {
+  return [...new Set((Array.isArray(values) ? values : []).map(value => normalizeZoneValue(value)).filter(Boolean))];
 }
 function saveProfile(profile) {
   state.user = profile;
@@ -536,34 +581,53 @@ function clearAutoLocation(targets) {
   }
 }
 
-function updateLotLocations(form) {
-  if (!form) return;
+async function updateLotLocations(form, refreshMissing) {
+  if (!form) return false;
   const targets = {
     finca: form.querySelector('[data-location-target="finca"]'),
     zona: form.querySelector('[data-location-target="zona"]')
   };
   const status = form.querySelector('[data-lot-location-status]');
-  if (!targets.finca || !targets.zona || !status) return;
-  const lots = [...form.querySelectorAll('[data-lot-lookup]')]
+  if (!targets.finca || !targets.zona || !status) return false;
+  const readLots = () => [...form.querySelectorAll('[data-lot-lookup]')]
     .map(input => String(input.value || '').trim())
     .filter(Boolean);
+  const lots = readLots();
   if (!lots.length) {
     clearAutoLocation(targets);
     status.textContent = 'Ingresa un lote para completar finca y zona.';
-    return;
+    return true;
   }
-  const matches = lots.map(lot => ({ lot, location: state.lotLookup[lot] || null }));
-  const missing = matches.find(match => !match.location);
-  if (missing) {
+  let matches = lots.map(lot => ({ lot, location: state.lotLookup[lot] || null }));
+  let missingLots = [...new Set(matches.filter(match => !match.location).map(match => match.lot))];
+  if (missingLots.length && refreshMissing && navigator.onLine) {
+    status.textContent = 'Verificando el lote en la lista autorizada...';
+    try {
+      await Promise.all(missingLots.map(refreshLotLookupEntry));
+    } catch (error) {
+      console.warn('No se pudo verificar el lote en la lista autorizada.', error);
+      if (readLots().join('\u0000') === lots.join('\u0000')) {
+        clearAutoLocation(targets);
+        status.textContent = 'No se pudo comprobar el lote. Verifica tu conexión e inténtalo de nuevo.';
+      }
+      return null;
+    }
+    if (readLots().join('\u0000') !== lots.join('\u0000')) return false;
+    matches = lots.map(lot => ({ lot, location: state.lotLookup[lot] || null }));
+    missingLots = [...new Set(matches.filter(match => !match.location).map(match => match.lot))];
+  }
+  if (missingLots.length) {
     clearAutoLocation(targets);
-    status.textContent = 'El lote ' + missing.lot + ' no está disponible para esta cuenta; verifica el código y la zona asignada.';
-    return;
+    status.textContent = !navigator.onLine
+      ? 'Sin conexión: no se pudo comprobar el lote ' + missingLots[0] + ' en la lista guardada.'
+      : 'El lote ' + missingLots[0] + ' no está disponible para esta cuenta; verifica el código y la zona asignada.';
+    return false;
   }
   const locations = new Map(matches.map(match => [match.location.zona + '|' + match.location.finca, match.location]));
   if (locations.size !== 1) {
     clearAutoLocation(targets);
     status.textContent = 'Los lotes ingresados corresponden a varias fincas o zonas; no se completó una ubicación única.';
-    return;
+    return true;
   }
   const location = locations.values().next().value;
   targets.finca.value = location.finca;
@@ -571,6 +635,7 @@ function updateLotLocations(form) {
   targets.finca.dataset.autofilledValue = location.finca;
   targets.zona.dataset.autofilledValue = location.zona;
   status.textContent = 'Ubicación encontrada: finca ' + location.finca + ' · zona ' + location.zona + '.';
+  return true;
 }
 
 function updateZoneFromFarm(form) {
@@ -930,7 +995,7 @@ function captureLocation() {
 }
 function renderUsers(users, zones) {
   $('#users-list').innerHTML = users.slice().sort((a, b) => a.display_name.localeCompare(b.display_name, 'es')).map(user =>
-    '<article class="user-row"><span class="user-avatar">' + esc(initials(user.display_name)) + '</span><span class="user-info"><strong>' + esc(user.display_name) + '</strong><small>' + esc((user.email || 'Sin correo') + ' · ' + user.username + ' · ' + (user.status === 'active' ? 'Activa' : user.status === 'suspended' ? 'Suspendida' : 'Pendiente')) + '</small></span><span class="member-actions"><select class="select-input" data-member-role="' + esc(user.id) + '" data-original-role="' + esc(user.role) + '" aria-label="Perfil para ' + esc(user.display_name) + '">' + ROLE_OPTIONS.map(role => '<option value="' + role + '"' + (user.role === role ? ' selected' : '') + '>' + esc(roleName(role)) + '</option>').join('') + '</select></span><details class="member-zone-picker"' + (['admin', 'aereo'].includes(user.role) ? ' hidden' : '') + '><summary>' + (['admin', 'aereo'].includes(user.role) ? 'Todas las zonas' : 'Zonas permitidas (' + (user.allowed_zones || []).length + ')') + '</summary><div class="zone-checkboxes">' + zones.map(zone => '<label><input type="checkbox" data-member-zone="' + esc(user.id) + '" value="' + esc(zone) + '"' + ((user.allowed_zones || []).includes(zone) ? ' checked' : '') + '> ' + esc(zone) + '</label>').join('') + '</div></details><button class="secondary-button" type="button" data-member-save="' + esc(user.id) + '">Guardar</button></article>'
+    '<article class="user-row"><span class="user-avatar">' + esc(initials(user.display_name)) + '</span><span class="user-info"><strong>' + esc(user.display_name) + '</strong><small>' + esc((user.email || 'Sin correo') + ' · ' + user.username + ' · ' + (user.status === 'active' ? 'Activa' : user.status === 'suspended' ? 'Suspendida' : 'Pendiente')) + '</small></span><span class="member-actions"><select class="select-input" data-member-role="' + esc(user.id) + '" data-original-role="' + esc(user.role) + '" aria-label="Perfil para ' + esc(user.display_name) + '">' + ROLE_OPTIONS.map(role => '<option value="' + role + '"' + (user.role === role ? ' selected' : '') + '>' + esc(roleName(role)) + '</option>').join('') + '</select></span><details class="member-zone-picker"' + (['admin', 'aereo'].includes(user.role) ? ' hidden' : '') + '><summary>' + (['admin', 'aereo'].includes(user.role) ? 'Todas las zonas' : 'Zonas permitidas (' + (user.allowed_zones || []).length + ')') + '</summary><div class="zone-checkboxes">' + zones.map(zone => '<label><input type="checkbox" data-member-zone="' + esc(user.id) + '" value="' + esc(zone) + '"' + ((user.allowed_zones || []).some(userZone => normalizeZoneValue(userZone).toLowerCase() === normalizeZoneValue(zone).toLowerCase()) ? ' checked' : '') + '> ' + esc(zone) + '</label>').join('') + '</div></details><button class="secondary-button" type="button" data-member-save="' + esc(user.id) + '">Guardar</button></article>'
   ).join('') || emptyState('Aún no hay cuentas.');
 }
 async function refreshUsers() {
@@ -939,7 +1004,10 @@ async function refreshUsers() {
   const zones = new Set();
   for (let offset = 0, lots; ; offset += 1000) {
     lots = await cloudRequest('field_lots?select=zone&order=lot_code.asc&limit=1000&offset=' + offset);
-    for (const lot of lots) zones.add(lot.zone);
+    for (const lot of lots) {
+      const zone = normalizeZoneValue(lot.zone);
+      if (zone) zones.add(zone);
+    }
     if (lots.length < 1000) break;
   }
   state.zoneOptions = [...zones].sort((a, b) => a.localeCompare(b, 'es'));
@@ -956,7 +1024,8 @@ function populateCreateUserRoles() {
   select.innerHTML = ROLE_OPTIONS.map(role => '<option value="' + esc(role) + '">' + esc(roleName(role)) + '</option>').join('');
 }
 function renderZoneCheckboxes(container, zones, selected, attribute) {
-  container.innerHTML = zones.map(zone => '<label><input type="checkbox" ' + attribute + ' value="' + esc(zone) + '"' + (selected.includes(zone) ? ' checked' : '') + '> ' + esc(zone) + '</label>').join('');
+  const normalizedSelected = selected.map(value => normalizeZoneValue(value).toLowerCase());
+  container.innerHTML = zones.map(zone => '<label><input type="checkbox" ' + attribute + ' value="' + esc(zone) + '"' + (normalizedSelected.includes(normalizeZoneValue(zone).toLowerCase()) ? ' checked' : '') + '> ' + esc(zone) + '</label>').join('');
 }
 function updateCreateUserZoneVisibility() {
   const role = $('#create-user-role').value;
@@ -984,7 +1053,11 @@ function userCanAccessLot(lotCode) {
 }
 function userCanAccessZone(zone) {
   if (!state.user) return false;
-  return ['admin', 'aereo'].includes(state.user.role) || (state.user.allowedZones || []).includes(String(zone));
+  const accessZone = normalizeZoneValue(zone).toLowerCase();
+  const allowedZones = Array.isArray(state.user.allowedZones)
+    ? state.user.allowedZones.map(value => normalizeZoneValue(value).toLowerCase())
+    : [];
+  return ['admin', 'aereo'].includes(state.user.role) || allowedZones.includes(accessZone);
 }
 function invalidLotsInForm(form) {
   const invalidLots = [...form.querySelectorAll('[data-lot-lookup]')]
@@ -1173,10 +1246,11 @@ document.addEventListener('change', event => {
     'Zonas permitidas (' + $$('[data-member-zone]:checked', userRow).length + ')';
 });
 $('#capture-form').addEventListener('input', event => {
-  if (event.target.matches('[data-lot-lookup]')) updateLotLocations($('#form-fields'));
+  if (event.target.matches('[data-lot-lookup]')) void updateLotLocations($('#form-fields'), false);
   if (event.target.matches('[data-farm-selector]')) updateZoneFromFarm($('#form-fields'));
 });
 $('#capture-form').addEventListener('change', event => {
+  if (event.target.matches('[data-lot-lookup]')) void updateLotLocations($('#form-fields'), true);
   if (event.target.matches('[data-farm-selector]')) updateZoneFromFarm($('#form-fields'));
 });
 $('#form-fields').addEventListener('change', event => {
@@ -1188,6 +1262,11 @@ $('#capture-form').addEventListener('submit', async event => {
   event.preventDefault();
   const form = event.currentTarget;
   if (!form.reportValidity()) return;
+  const lotLookupResult = await updateLotLocations(form, true);
+  if (lotLookupResult === null) {
+    toast('No se pudo comprobar la disponibilidad de los lotes. Verifica tu conexión e inténtalo de nuevo.');
+    return;
+  }
   const unauthorizedLots = invalidLotsInForm(form);
   if (unauthorizedLots.length) {
     toast('Sin acceso a los lotes: ' + unauthorizedLots.join(', '));

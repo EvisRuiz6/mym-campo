@@ -544,13 +544,20 @@ function fieldMarkup(field, prefix, includeName) {
   const accept = field.accept ? ' accept="' + esc(field.accept) + '"' : '';
   const readonly = field.readonly ? ' readonly' : '';
   let control = '';
-  if (field.type === 'select') {
+  if (field.lotLookup) {
+    const lots = Object.entries(state.lotLookup)
+      .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
+      .map(([lot, location]) =>
+        '<option value="' + esc(lot) + '">' + esc(lot + ' · ' + location.finca + ' · zona ' + location.zona) + '</option>'
+      ).join('');
+    control = '<select id="' + esc(id) + '"' + fieldAttributes + ' class="select-input"' + required + '><option value="">' + (lots ? 'Selecciona lote' : 'No hay lotes disponibles') + '</option>' + lots + '</select>';
+  } else if (field.type === 'select') {
     control = '<select id="' + esc(id) + '"' + fieldAttributes + ' class="select-input"' + required + '><option value="">Selecciona</option>' + (field.options || []).map(option => '<option value="' + esc(option.value == null ? option : option.value) + '">' + esc(option.label == null ? option : option.label) + '</option>').join('') + '</select>';
   } else if (field.type === 'textarea') {
     control = '<textarea id="' + esc(id) + '"' + fieldAttributes + ' class="text-area"' + required + '></textarea>';
   } else {
     const type = field.type || 'text';
-    const inputMode = field.lotLookup ? ' inputmode="numeric"' : type === 'number' ? ' inputmode="decimal"' : '';
+    const inputMode = type === 'number' ? ' inputmode="decimal"' : '';
     const value = field.value != null ? ' value="' + esc(field.value) + '"' : '';
     const placeholder = field.calculated ? ' placeholder="Resultado de la hoja; fórmula pendiente de confirmar"' : field.placeholder ? ' placeholder="' + esc(field.placeholder) + '"' : '';
     control = '<input id="' + esc(id) + '" type="' + esc(type) + '"' + fieldAttributes + ' class="text-input"' + required + step + min + max + accept + inputMode + value + placeholder + readonly + '>';
@@ -564,10 +571,10 @@ function commonFields(withLotLookup) {
   return '<section class="form-section"><h2>Datos de la actividad</h2><div class="field-grid">' +
     fieldMarkup({ label: 'Fecha', name: 'fecha', type: 'date', value: localDate(), required: true }, 'f-date', true) +
     fieldMarkup({ label: 'Responsable', name: 'responsable', value: state.user.displayName, required: true }, 'f-user', true) +
-    (!lotLookup ? fieldMarkup({ label: 'Lote', name: 'lote', lotLookup: true, required: true, hint: 'Ingresa el lote para completar finca y zona.' }, 'f-lot', true) : '') +
-    fieldMarkup({ label: 'Zona', name: 'zona', placeholder: 'Se completa al ingresar un lote', locationTarget: 'zona', farmZoneTarget: true }, 'f-zone', true) +
-    fieldMarkup({ label: 'Finca', name: 'finca', type: lotLookup ? 'text' : 'select', required: true, placeholder: lotLookup ? 'Se completa al ingresar un lote' : undefined, locationTarget: 'finca', farmSelector: true, options: lotLookup ? undefined : farmOptions }, 'f-farm', true) +
-    '<div class="field full"><div class="field-hint" data-lot-location-status role="status">Ingresa un lote para completar finca y zona.</div></div>' +
+    (!lotLookup ? fieldMarkup({ label: 'Lote', name: 'lote', lotLookup: true, required: true, hint: 'Selecciona el lote para completar finca y zona.' }, 'f-lot', true) : '') +
+    fieldMarkup({ label: 'Zona', name: 'zona', placeholder: 'Se completa al seleccionar un lote', locationTarget: 'zona', farmZoneTarget: true }, 'f-zone', true) +
+    fieldMarkup({ label: 'Finca', name: 'finca', type: lotLookup ? 'text' : 'select', required: true, placeholder: lotLookup ? 'Se completa al seleccionar un lote' : undefined, locationTarget: 'finca', farmSelector: true, options: lotLookup ? undefined : farmOptions }, 'f-farm', true) +
+    '<div class="field full"><div class="field-hint" data-lot-location-status role="status">Selecciona un lote para completar finca y zona.</div></div>' +
     '<div class="field full"><div class="field-hint" data-farm-zone-status role="status"></div></div>' +
     '<div class="field"><label class="field-label" for="f-recorded-at">Hora de registro (automática)</label><input id="f-recorded-at" name="hora_registro" class="text-input" type="datetime-local" value="' + localDateTime() + '" readonly><div class="field-hint">Se fija al guardar la captura.</div></div>' +
     '</div></section>';
@@ -595,7 +602,7 @@ async function updateLotLocations(form, refreshMissing) {
   const lots = readLots();
   if (!lots.length) {
     clearAutoLocation(targets);
-    status.textContent = 'Ingresa un lote para completar finca y zona.';
+    status.textContent = 'Selecciona un lote para completar finca y zona.';
     return true;
   }
   let matches = lots.map(lot => ({ lot, location: state.lotLookup[lot] || null }));
@@ -676,7 +683,7 @@ function weedsFields() {
     fieldMarkup({ label: 'RESPONSABLE', name: 'RESPONSABLE', value: state.user.displayName }, 'weeds-owner', true) +
     fieldMarkup({ label: 'ZONA', name: 'ZONA', locationTarget: 'zona' }, 'weeds-zone', true) +
     fieldMarkup({ label: 'FINCA', name: 'FINCA', locationTarget: 'finca' }, 'weeds-farm', true) +
-    '<div class="field full"><div class="field-hint" data-lot-location-status role="status">Ingresa un lote para completar finca y zona.</div></div></div></section><section class="form-section"><h2>Datos Malezas por lote</h2><p class="field-hint">Puedes agregar un detalle por cada lote visitado. Los registros quedan vinculados a esta visita en la captura local.</p>' +
+    '<div class="field full"><div class="field-hint" data-lot-location-status role="status">Selecciona un lote para completar finca y zona.</div></div></div></section><section class="form-section"><h2>Datos Malezas por lote</h2><p class="field-hint">Puedes agregar un detalle por cada lote visitado. Los registros quedan vinculados a esta visita en la captura local.</p>' +
     repeatSection('malezas_detalle', 'Detalle de malezas', 'Agregar lote', 'Incluye lote, labor, porcentajes de control y cobertura, imagen, catorcena y observaciones.') + '</section>';
 }
 function eppFields() {

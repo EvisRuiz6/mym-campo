@@ -265,9 +265,9 @@ function localDate() {
   const d = new Date();
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
-function localDateTime(value) {
-  const d = value ? new Date(value) : new Date();
-  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') + 'T' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+function localTime() {
+  const d = new Date();
+  return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
 }
 function esc(value) {
   return String(value == null ? '' : value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -581,7 +581,7 @@ function commonFields(withLotLookup) {
     fieldMarkup({ label: 'Finca', name: 'finca', type: lotLookup ? 'text' : 'select', required: true, placeholder: lotLookup ? 'Se completa al ingresar un lote' : undefined, locationTarget: 'finca', farmSelector: true, options: lotLookup ? undefined : farmOptions }, 'f-farm', true) +
     '<div class="field full"><div class="field-hint" data-lot-location-status role="status">Ingresa un lote para completar finca y zona.</div></div>' +
     '<div class="field full"><div class="field-hint" data-farm-zone-status role="status"></div></div>' +
-    '<div class="field"><label class="field-label" for="f-recorded-at">Hora de registro (automática)</label><input id="f-recorded-at" name="hora_registro" class="text-input" type="datetime-local" value="' + localDateTime() + '" readonly><div class="field-hint">Se fija al guardar la captura.</div></div>' +
+    '<div class="field"><label class="field-label" for="f-recorded-at">Hora de registro (automática)</label><input id="f-recorded-at" name="hora_registro" class="text-input" type="time" value="' + localTime() + '" readonly><div class="field-hint">Solo se registra la hora; la fecha se captura por separado.</div></div>' +
     '</div></section>';
 }
 
@@ -841,7 +841,7 @@ function chooseModule(key) {
   if (state.recordTimeTimer) clearInterval(state.recordTimeTimer);
   state.recordTimeTimer = setInterval(() => {
     const input = $('#f-recorded-at');
-    if (input) input.value = localDateTime();
+    if (input) input.value = localTime();
   }, 15000);
   if (key === 'clima') {
     let index = 0;
@@ -1296,7 +1296,7 @@ $('#capture-form').addEventListener('submit', async event => {
   let datos;
   try { datos = await serializeForm(form, recordId); }
   catch (error) { console.error(error); toast('No se pudo leer una imagen adjunta.'); return; }
-  datos.hora_registro = createdAt;
+  datos.hora_registro = localTime();
   const record = {
     id: recordId, tipo: state.currentModule, createdAt, schemaVersion: 5, syncStatus: 'pending',
     syncOrigin: 'new', ownerUsername: state.user.username, ownerName: state.user.displayName, ownerRole: state.user.role, datos: datos

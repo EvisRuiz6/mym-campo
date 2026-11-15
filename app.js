@@ -957,16 +957,96 @@ function titleFor(record) {
 function formatDate(date) {
   return date ? new Date(date + 'T12:00:00').toLocaleDateString('es-GT', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Sin fecha';
 }
+function recordStatus(record) {
+  return record.syncStatus !== 'synced' ? 'En cola' : record.reviewStatus === 'approved' ? 'Aprobado' : record.reviewStatus === 'rejected' ? 'Rechazado' : 'Pendiente de revisión';
+}
+function recordDetailLabel(key) {
+  const label = String(key).replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').trim();
+  return label ? label.charAt(0).toLocaleUpperCase('es') + label.slice(1) : 'Dato';
+}
+function recordDetailFieldMarkup(key, value, depth) {
+  return '<div class="record-detail-item"><dt>' + esc(recordDetailLabel(key)) + '</dt><dd>' + recordDetailValueMarkup(value, depth) + '</dd></div>';
+}
+function formatFileSize(size) {
+  if (size < 1024) return size + ' B';
+  if (size < 1048576) return (size / 1024).toFixed(1) + ' KB';
+  return (size / 1048576).toFixed(1) + ' MB';
+}
+function recordDetailValueMarkup(value, depth) {
+  if (value === null || value === undefined || value === '') return '<span class="record-detail-empty">Sin dato</span>';
+  if (typeof value === 'boolean') return value ? 'Sí' : 'No';
+  if (typeof value === 'string' || typeof value === 'number') return esc(value);
+  if (depth > 6) return '<span class="record-detail-empty">Contenido anidado</span>';
+  if (Array.isArray(value)) {
+    if (!value.length) return '<span class="record-detail-empty">Sin datos</span>';
+    return '<ol class="record-detail-list">' + value.map((item, index) => '<li><span class="record-detail-index">Elemento ' + (index + 1) + '</span>' + recordDetailValueMarkup(item, depth + 1) + '</li>').join('') + '</ol>';
+  }
+  if (typeof value === 'object') {
+    if (typeof value.dataUrl === 'string' && value.dataUrl.startsWith('data:')) {
+      const attachmentDetails = [
+        typeof value.name === 'string' ? value.name : 'Archivo adjunto',
+        typeof value.mimeType === 'string' ? value.mimeType : '',
+        typeof value.size === 'number' && Number.isFinite(value.size) && value.size >= 0 ? formatFileSize(value.size) : ''
+      ].filter(Boolean);
+      return '<div class="record-detail-attachment"><strong>' + esc(attachmentDetails[0]) + '</strong><small>' + esc(attachmentDetails.slice(1).join(' · ') || 'Adjunto guardado con la captura.') + '</small></div>';
+    }
+    const fields = Object.entries(value);
+    if (!fields.length) return '<span class="record-detail-empty">Sin datos</span>';
+    return '<dl class="record-detail-nested">' + fields.map(([key, child]) => recordDetailFieldMarkup(key, child, depth + 1)).join('') + '</dl>';
+  }
+  return esc(String(value));
+}
+function recordDetailsMarkup(record) {
+  const data = record.datos;
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return emptyState('Este registro no contiene campos para mostrar.');
+  const fields = Object.entries(data);
+  return fields.length
+    ? '<dl class="record-detail-grid">' + fields.map(([key, value]) => recordDetailFieldMarkup(key, value, 0)).join('') + '</dl>'
+    : emptyState('Este registro no contiene campos para mostrar.');
+}
+function recordDetailTime(value) {
+  const text = String(value || '').trim();
+  const oldDateTime = text.match(/T(\d{2}:\d{2})/);
+  return oldDateTime ? oldDateTime[1] : text;
+}
+async function showRecordDetails(recordId) {
+  const record = await getRecord(recordId);
+  if (!record || !visibleLocalRecords([record]).length) {
+    toast('Este registro no está disponible para tu perfil.');
+    return;
+  }
+  const data = record.datos || {};
+  const site = data.finca || data.lote || data.id_lote;
+  const date = data.fecha || data.FECHA;
+  const time = recordDetailTime(data.hora_registro);
+  const summary = [
+    record.ownerName || data.responsable,
+    site,
+    date ? formatDate(date) : '',
+    time ? 'Hora ' + time : '',
+    recordStatus(record)
+  ].filter(Boolean).join(' · ');
+  const dialog = $('#record-detail-dialog');
+  $('#record-detail-title').textContent = titleFor(record);
+  $('#record-detail-summary').textContent = summary;
+  $('#record-detail-content').innerHTML = recordDetailsMarkup(record);
+  if (typeof dialog.showModal !== 'function') {
+    toast('Este navegador no permite abrir el detalle de registros.');
+    return;
+  }
+  if (!dialog.open) dialog.showModal();
+}
 function recordRow(record) {
   const module = modules[record.tipo] || { icon: '•' };
   const site = record.datos.finca || record.datos.lote || record.datos.id_lote || 'Sin finca/lote';
   const detail = [site, record.ownerName, formatDate(record.datos.fecha || record.datos.FECHA)].filter(Boolean).join(' · ');
   const reviewer = state.user && ['admin', 'supervisor'].includes(state.user.role);
-  const status = record.syncStatus !== 'synced' ? 'En cola' : record.reviewStatus === 'approved' ? 'Aprobado' : record.reviewStatus === 'rejected' ? 'Rechazado' : 'Pendiente de revisión';
+  const status = recordStatus(record);
   const actions = reviewer && record.ownerId && record.ownerId !== state.user.id && record.reviewStatus === 'pending'
     ? '<span class="record-review-actions"><button type="button" data-review="approved" data-record-id="' + esc(record.id) + '">Aprobar</button><button type="button" data-review="rejected" data-record-id="' + esc(record.id) + '">Rechazar</button></span>'
     : '';
-  return '<article class="record-row"><span class="record-symbol" aria-hidden="true">' + module.icon + '</span><span class="record-info"><strong>' + esc(titleFor(record)) + '</strong><small>' + esc(detail) + '</small></span><span class="record-status">' + esc(status) + '</span>' + actions + '</article>';
+  const viewAction = '<button type="button" class="record-view-button" data-view-record="' + esc(record.id) + '" aria-label="Ver datos de ' + esc(titleFor(record)) + '">Ver datos</button>';
+  return '<article class="record-row"><span class="record-symbol" aria-hidden="true">' + module.icon + '</span><span class="record-info"><strong>' + esc(titleFor(record)) + '</strong><small>' + esc(detail) + '</small></span><span class="record-status">' + esc(status) + '</span>' + viewAction + actions + '</article>';
 }
 function emptyState(message) { return '<div class="empty-state">' + esc(message) + '</div>'; }
 async function refreshLists() {
@@ -1213,6 +1293,14 @@ async function endSession() {
 document.addEventListener('click', event => {
   const authMode = event.target.closest('[data-auth-mode]');
   if (authMode) { showAuthScreen(authMode.dataset.authMode); return; }
+  const viewRecord = event.target.closest('[data-view-record]');
+  if (viewRecord) {
+    showRecordDetails(viewRecord.dataset.viewRecord).catch(error => {
+      console.error(error);
+      toast('No se pudo cargar la información de la captura.');
+    });
+    return;
+  }
   const reviewButton = event.target.closest('[data-review]');
   if (reviewButton) {
     reviewRecord(reviewButton.dataset.recordId, reviewButton.dataset.review).catch(handleCloudError);

@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#174b38">
   <meta name="description" content="Captura de labores aéreas y terrestres para MyM Data">
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="app.css?v=16">
+  <link rel="stylesheet" href="app.css?v=17">
   <title>MyM Campo</title>
 </head>
 <body>
@@ -133,6 +133,7 @@
 
         <section id="page-registros" class="page" hidden>
           <p class="eyebrow">REGISTROS COMPARTIDOS</p><h1>Registros</h1><p class="subtitle">Cada usuario ve sus capturas; supervisores y administradores pueden revisar las del equipo.</p>
+          <p class="record-query-hint">Selecciona “Ver datos” para consultar la información completa de una captura guardada o sincronizada.</p>
           <div class="record-toolbar"><label class="search-field">⌕ <input id="record-search" type="search" placeholder="Buscar por finca, actividad o responsable" aria-label="Buscar registros"></label><button id="export-all" class="secondary-button" type="button">Exportar JSON</button></div>
           <div id="all-records" class="record-list"></div>
         </section>
@@ -178,10 +179,21 @@
         </section>
       </main>
     </div>
+    <dialog id="record-detail-dialog" class="record-detail-dialog" aria-labelledby="record-detail-title">
+      <div class="record-detail-card">
+        <div class="record-detail-heading">
+          <div><p class="eyebrow">INFORMACIÓN CARGADA · SOLO LECTURA</p><h2 id="record-detail-title"></h2></div>
+          <form method="dialog"><button class="record-detail-close" type="submit" aria-label="Cerrar">×</button></form>
+        </div>
+        <p id="record-detail-summary" class="record-detail-summary"></p>
+        <div id="record-detail-content" class="record-detail-content"></div>
+        <form method="dialog" class="dialog-actions"><button class="secondary-button" type="submit">Cerrar</button></form>
+      </div>
+    </dialog>
     <nav class="mobile-nav" aria-label="Navegación móvil"><button data-page="inicio" class="active"><span>⌂</span>Inicio</button><button data-page="capturar"><span>＋</span>Capturar</button><button data-page="pendientes"><span>◷</span>Pendientes</button><button data-page="registros"><span>▤</span>Registros</button><button class="admin-mobile-nav" data-page="usuarios" hidden><span>♙</span>Usuarios</button></nav>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </div>
   <script src="config.js"></script>
-  <script src="app.js?v=26"></script>
+  <script src="app.js?v=27"></script>
 </body>
 </html>

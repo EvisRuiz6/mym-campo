@@ -36,14 +36,6 @@ const eppReportRoles = {
   '7_ ENVASES': 'Personal que manipula envases vacíos',
   '8_INVESTIGACIÓN': 'Personal de Investigación'
 };
-const eppOtherReportItems = [
-  'Utilización de tarjetas Hidrosensibles, en área sensible',
-  'Utilización de bandejas antiderrames',
-  'Utilización de rótulos de prevención de aplicación aérea',
-  'Perforación envases',
-  'Triple Lavado, en recipientes',
-  'Uso de jabón Neutro'
-];
 const qualityForms = {
   aguilon: {
     label: 'F.C. AGUILÓN',
@@ -983,6 +975,23 @@ function eppReportCount(value) {
   const count = Number(value);
   return Number.isFinite(count) ? esc(count) : esc(value);
 }
+function eppReportComplianceSummary(data) {
+  const attendanceValue = data.asistencia_general;
+  const equippedValue = data.personas_completamente_equipadas;
+  const attendance = Number(attendanceValue);
+  const equipped = Number(equippedValue);
+  const hasCounts = attendanceValue !== undefined && attendanceValue !== null && String(attendanceValue).trim() !== '' &&
+    equippedValue !== undefined && equippedValue !== null && String(equippedValue).trim() !== '' &&
+    Number.isFinite(attendance) && Number.isFinite(equipped);
+  const savedPercent = Number(data.cumplimiento_epp_general_pct);
+  const hasSavedPercent = data.cumplimiento_epp_general_pct !== undefined &&
+    data.cumplimiento_epp_general_pct !== null && String(data.cumplimiento_epp_general_pct).trim() !== '' &&
+    Number.isFinite(savedPercent);
+  if (!hasCounts && !hasSavedPercent) return 'Sin datos';
+  const percent = hasCounts ? (attendance > 0 ? (equipped / attendance) * 100 : 0) : savedPercent;
+  const counts = hasCounts ? ' (' + eppReportCount(equipped) + ' de ' + eppReportCount(attendance) + ' personas)' : '';
+  return percent.toFixed(1) + '%' + counts;
+}
 function eppReportRoleRows(role, attendance, compliance) {
   const items = role.items || [];
   if (!items.length) return '';
@@ -1003,14 +1012,6 @@ function eppReportRoleRows(role, attendance, compliance) {
     return '<tr>' + roleCell + '<td class="epp-report-index">' + (index + 1) + '</td><td class="epp-report-item">' + esc(item) + '</td>' + personCell + '<td class="epp-report-number">' + itemCount + '</td></tr>';
   }).join('') + '</tbody>';
 }
-function eppReportOtherRows() {
-  return '<tbody class="epp-report-group epp-report-other">' + eppOtherReportItems.map((item, index) => {
-    const roleCell = index === 0
-      ? '<td class="epp-report-role" rowspan="' + eppOtherReportItems.length + '">Otros</td>'
-      : '';
-    return '<tr>' + roleCell + '<td class="epp-report-index">' + (index + 1) + '</td><td class="epp-report-item" colspan="3">' + esc(item) + '</td></tr>';
-  }).join('') + '</tbody>';
-}
 function eppReportDocument(record) {
   const data = record.datos || {};
   const attendance = data.asistencia_por_funcion && typeof data.asistencia_por_funcion === 'object' && !Array.isArray(data.asistencia_por_funcion)
@@ -1020,6 +1021,7 @@ function eppReportDocument(record) {
     ? data.cumplimiento_epp_por_funcion
     : {};
   const groups = eppFunctions.map(role => eppReportRoleRows(role, attendance, compliance)).join('');
+  const complianceSummary = eppReportComplianceSummary(data);
   const date = data.fecha || data.FECHA;
   const metadata = [
     ['FECHA', date ? formatDate(date) : 'Sin fecha'],
@@ -1034,44 +1036,52 @@ function eppReportDocument(record) {
   const filename = 'EPP-' + slug(data.finca || data.lote || 'captura') + '-' + String(date || localDate()).replace(/[^0-9-]/g, '');
   const styles = `
     * { box-sizing: border-box; }
-    body { margin: 0; color: #263342; font-family: Arial, Helvetica, sans-serif; font-size: 10px; }
+    body { margin: 0; color: #182720; font-family: Arial, Helvetica, sans-serif; font-size: 9px; line-height: 1.4; }
     .epp-report { width: 100%; margin: 0 auto; }
-    .epp-report-header { position: relative; text-align: center; padding: 4px 76px 15px; }
-    .epp-report-title { margin: 0; color: #315b92; font-size: 21px; font-weight: 700; letter-spacing: .5px; }
-    .epp-report-brand { position: absolute; top: 0; right: 2px; color: #42a846; font-size: 11px; font-weight: 800; line-height: 1.05; text-align: center; }
-    .epp-report-meta-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px 18px; margin: 6px 0 15px; }
-    .epp-report-meta { display: flex; gap: 5px; min-width: 0; border-bottom: 1px solid #546477; padding: 3px 2px; }
-    .epp-report-meta strong { white-space: nowrap; }
+    .epp-report-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; margin: 0 0 8px; padding: 1px 0 9px; border-bottom: 2px solid #174b38; }
+    .epp-report-title { margin: 0; color: #182720; font-size: 18px; font-weight: 700; letter-spacing: -.02em; }
+    .epp-report-period { margin: 3px 0 0; color: #718078; font-size: 8px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+    .epp-report-brand { padding-top: 2px; color: #174b38; font-size: 8px; font-weight: 800; letter-spacing: .14em; line-height: 1.2; text-align: right; }
+    .epp-report-meta-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; margin: 0 0 10px; }
+    .epp-report-meta { display: flex; gap: 6px; min-width: 0; border-bottom: 1px solid #e4eae5; padding: 4px 2px; }
+    .epp-report-meta strong { color: #718078; font-size: 7px; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
     .epp-report-meta span { overflow-wrap: anywhere; }
-    .epp-report-section-title { margin: 0 0 9px; padding: 7px 6px; background: #bdbdbd; color: #3c628a; text-align: center; font-size: 11px; font-weight: 700; }
+    .epp-report-compliance { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 0 0 12px; border-left: 3px solid #174b38; padding: 7px 10px; background: #f2f6f3; }
+    .epp-report-compliance strong { color: #718078; font-size: 8px; letter-spacing: .06em; text-transform: uppercase; }
+    .epp-report-compliance span { color: #174b38; font-size: 14px; font-weight: 700; }
+    .epp-report-section-title { margin: 0 0 6px; padding: 0 0 5px; border-bottom: 1px solid #cfd8d1; color: #26342c; text-align: left; font-size: 9px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
     .epp-report-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 9px; }
     .epp-report-table col:nth-child(1) { width: 21%; }
     .epp-report-table col:nth-child(2) { width: 4%; }
     .epp-report-table col:nth-child(3) { width: 32%; }
     .epp-report-table col:nth-child(4) { width: 21.5%; }
     .epp-report-table col:nth-child(5) { width: 21.5%; }
-    .epp-report-table th, .epp-report-table td { border: 1px solid #333; padding: 4px 5px; vertical-align: middle; overflow-wrap: anywhere; }
-    .epp-report-table th { height: 46px; background: #bdbdbd; color: #3c628a; text-align: center; font-size: 9px; line-height: 1.3; }
-    .epp-report-role { font-weight: 700; line-height: 1.35; }
-    .epp-report-index, .epp-report-number { text-align: center; }
-    .epp-report-item { font-weight: 600; }
-    .epp-report-group:nth-of-type(even) { background: #e1e1e1; }
-    .epp-report-group { break-inside: avoid; page-break-inside: avoid; }
-    .epp-report-note { margin-top: 8px; color: #536158; font-size: 8px; line-height: 1.4; }
-    @page { size: letter portrait; margin: 11mm; }
+    .epp-report-table th, .epp-report-table td { border-bottom: 1px solid #dce5de; padding: 4px 5px; vertical-align: middle; overflow-wrap: anywhere; }
+    .epp-report-table th { border-bottom: 1.5px solid #174b38; background: #f2f6f3; color: #405448; text-align: left; font-size: 7px; line-height: 1.25; letter-spacing: .02em; text-transform: uppercase; }
+    .epp-report-table thead th:nth-child(2), .epp-report-table thead th:nth-child(4), .epp-report-table thead th:nth-child(5) { text-align: center; }
+    .epp-report-table thead th:nth-child(2) { white-space: nowrap; }
+    .epp-report-role { color: #26342c; font-weight: 700; line-height: 1.3; }
+    .epp-report-index, .epp-report-number { text-align: center; font-variant-numeric: tabular-nums; }
+    .epp-report-index { color: #718078; }
+    .epp-report-item { font-weight: 500; }
+    .epp-report-group:nth-of-type(even) { background: #f8faf8; }
+    .epp-report-group { border-top: 1px solid #e4eae5; break-inside: avoid; page-break-inside: avoid; }
+    .epp-report-note { margin: 8px 0 0; border-top: 1px solid #e4eae5; padding-top: 6px; color: #718078; font-size: 7px; line-height: 1.4; }
+    @page { size: letter portrait; margin: 10mm; }
     @media print {
       body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
-      .epp-report-header, .epp-report-section-title { break-after: avoid-page; }
+      .epp-report-header, .epp-report-compliance, .epp-report-section-title { break-after: avoid-page; }
       .epp-report-table thead { display: table-header-group; }
       .epp-report-table tr { break-inside: avoid; page-break-inside: avoid; }
     }
   `;
   return '<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>' + esc(filename) + '</title><style>' + styles + '</style></head><body><main class="epp-report">' +
-    '<header class="epp-report-header"><h1 class="epp-report-title">APLICACIONES AÉREAS 2025-2026</h1><div class="epp-report-brand">MADRE<br>TIERRA</div></header>' +
+    '<header class="epp-report-header"><div><h1 class="epp-report-title">APLICACIONES AÉREAS</h1><p class="epp-report-period">Temporada 2025-2026</p></div><div class="epp-report-brand">MADRE<br>TIERRA</div></header>' +
     '<section class="epp-report-meta-grid">' + metadata + '</section>' +
+    '<div class="epp-report-compliance"><strong>Porcentaje de cumplimiento general</strong><span>' + esc(complianceSummary) + '</span></div>' +
     '<h2 class="epp-report-section-title">Uso de equipo de protección personal aplicaciones con dron</h2>' +
     '<table class="epp-report-table"><colgroup><col><col><col><col><col></colgroup><thead><tr><th>Puesto</th><th>No.</th><th>Equipo de Protección</th><th>Número de personas que forman parte de la aplicación</th><th>Número de equipos de protección personal</th></tr></thead>' +
-    groups + eppReportOtherRows() + '</table><p class="epp-report-note">Las cantidades de la tabla reflejan los valores capturados por función y por elemento de EPP. Los registros en cola aún no se han sincronizado; el estado de revisión se indica arriba.</p></main></body></html>';
+    groups + '</table><p class="epp-report-note">El porcentaje general estima cuántas personas cumplen con todo el EPP, usando el menor conteo por función; puede no representar a las mismas personas. Las cantidades de la tabla reflejan los valores capturados por función y por elemento de EPP. Los registros en cola aún no se han sincronizado; el estado de revisión se indica arriba.</p></main></body></html>';
 }
 async function generateEppPdf(recordId) {
   const printWindow = window.open('', '_blank');

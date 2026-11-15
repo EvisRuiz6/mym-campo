@@ -3,7 +3,9 @@ import sys
 import tempfile
 import unittest
 import zipfile
+from contextlib import nullcontext
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import import_lot_boundaries
@@ -121,6 +123,43 @@ class ImportLotBoundariesTests(unittest.TestCase):
             _, rows = import_lot_boundaries.load_boundaries(archive_path)
 
         self.assertEqual(rows[0]["finca"], "SAN MIGUEL MÁLAGA")
+
+    def test_upload_sends_new_secret_key_only_as_apikey(self):
+        requests = []
+
+        def fake_urlopen(request, timeout):
+            requests.append(request)
+            return nullcontext()
+
+        with patch.object(import_lot_boundaries, "urlopen", side_effect=fake_urlopen):
+            import_lot_boundaries.upload_boundaries(
+                [{"lot_code": "0000001"}],
+                "https://project.supabase.co",
+                "sb_secret_example",
+            )
+
+        self.assertEqual(requests[0].get_header("Apikey"), "sb_secret_example")
+        self.assertIsNone(requests[0].get_header("Authorization"))
+
+    def test_upload_sends_legacy_service_role_as_bearer(self):
+        requests = []
+
+        def fake_urlopen(request, timeout):
+            requests.append(request)
+            return nullcontext()
+
+        legacy_key = "eyJlegacy.service-role.key"
+        with patch.object(import_lot_boundaries, "urlopen", side_effect=fake_urlopen):
+            import_lot_boundaries.upload_boundaries(
+                [{"lot_code": "0000001"}],
+                "https://project.supabase.co",
+                legacy_key,
+            )
+
+        self.assertEqual(requests[0].get_header("Apikey"), legacy_key)
+        self.assertEqual(
+            requests[0].get_header("Authorization"), "Bearer " + legacy_key
+        )
 
 
 if __name__ == "__main__":

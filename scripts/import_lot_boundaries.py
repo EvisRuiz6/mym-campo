@@ -356,10 +356,11 @@ def upload_boundaries(rows, url, service_role_key, batch_size=DEFAULT_BATCH_SIZE
     endpoint = url.rstrip("/") + "/rest/v1/field_lot_boundaries?on_conflict=lot_code"
     headers = {
         "apikey": service_role_key,
-        "Authorization": "Bearer " + service_role_key,
         "Content-Type": "application/json",
         "Prefer": "resolution=merge-duplicates,return=minimal",
     }
+    if not service_role_key.startswith("sb_secret_"):
+        headers["Authorization"] = "Bearer " + service_role_key
     batch_count = (len(rows) + batch_size - 1) // batch_size
     for batch_index, offset in enumerate(range(0, len(rows), batch_size), start=1):
         body = json.dumps(

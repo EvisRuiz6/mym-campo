@@ -108,11 +108,11 @@ const childSchemas = {
   malezas_detalle: [
     { label: 'FECHA', key: 'FECHA', type: 'date', value: localDate() },
     { label: 'LOTE', key: 'LOTE', lotLookup: true },
-    { label: 'LABOR', key: 'LABOR' },
+    { label: 'LABOR', key: 'LABOR', type: 'select', required: true, options: ['Plantilla', 'Soca'] },
     { label: '% CONTROL', key: '% CONTROL', type: 'number', step: '0.01', min: '0', max: '100' },
     { label: '% COBERTURA', key: '% COBERTURA', type: 'number', step: '0.01', min: '0', max: '100' },
     { label: 'IMÁGENES', key: 'IMAGEN', type: 'file', accept: 'image/*', multiple: true, hint: 'Puedes seleccionar una o varias imágenes para este lote.', full: true },
-    { label: 'CATORCENA', key: 'CATORCENA', type: 'number', step: '1' },
+    { label: 'CATORCENA', key: 'CATORCENA', type: 'number', step: '1', readonly: true, hint: 'Se calcula automáticamente según la fecha del detalle.' },
     { label: 'OBSERVACIONES', key: 'OBSERVACIONES', type: 'textarea', full: true }
   ],
   calibracion_pc: [
@@ -707,7 +707,7 @@ function weedsFields() {
     fieldMarkup({ label: 'ZONA', name: 'ZONA', placeholder: 'Se completa al seleccionar la finca', locationTarget: 'zona', farmZoneTarget: true }, 'weeds-zone', true) +
     fieldMarkup({ label: 'FINCA', name: 'FINCA', type: 'select', locationTarget: 'finca', farmSelector: true, options: farmOptions }, 'weeds-farm', true) +
     '<div class="field full"><div class="field-hint" data-farm-zone-status role="status">Selecciona una finca para completar la zona.</div></div><div class="field full"><div class="field-hint" data-lot-location-status role="status">Ingresa un lote para completar finca y zona.</div></div></div></section><section class="form-section"><h2>Datos Malezas por lote</h2><p class="field-hint">Puedes agregar un detalle por cada lote visitado. Los registros quedan vinculados a esta visita en la captura local.</p>' +
-    repeatSection('malezas_detalle', 'Detalle de malezas', 'Agregar lote', 'Incluye lote, labor, porcentajes de control y cobertura, imágenes, catorcena y observaciones.') + '</section>';
+    repeatSection('malezas_detalle', 'Detalle de malezas', 'Agregar lote', 'Incluye lote, labor (Plantilla o Soca), porcentajes de control y cobertura, imágenes, catorcena automática y observaciones.') + '</section>';
 }
 function eppFields() {
   return commonFields() + '<section class="form-section"><h2>Labor y asistencia</h2><div class="field-grid">' +
@@ -739,6 +739,40 @@ function qualityFields() {
 }
 function repeatSection(key, title, addLabel, note) {
   return '<section class="nested-section"><div class="nested-heading"><div><h3>' + esc(title) + '</h3><p class="field-hint">' + esc(note || 'Añade una fila por medición relacionada.') + '</p></div></div><div class="child-list" data-repeat-list="' + esc(key) + '"></div><button class="add-row" type="button" data-add-child="' + esc(key) + '">＋ ' + esc(addLabel || 'Agregar detalle') + '</button></section>';
+}
+function weedsCatorcenaForDate(value) {
+  const dateValue = String(value || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateValue)) return null;
+  const dateTime = Date.parse(dateValue + 'T00:00:00Z');
+  if (!Number.isFinite(dateTime) || new Date(dateTime).toISOString().slice(0, 10) !== dateValue) return null;
+
+  const dayMilliseconds = 24 * 60 * 60 * 1000;
+  const periods = [
+    { period: '30', start: '2025-10-20', end: '2026-10-18' },
+    { period: '31', start: '2026-10-19', end: '2027-10-17' }
+  ];
+  for (const period of periods) {
+    const start = Date.parse(period.start + 'T00:00:00Z');
+    const end = Date.parse(period.end + 'T00:00:00Z');
+    if (dateTime >= start && dateTime <= end) {
+      return { period: period.period, number: Math.floor((dateTime - start) / dayMilliseconds / 14) + 1 };
+    }
+  }
+  return null;
+}
+function updateWeedsCatorcena(row) {
+  if (!row) return;
+  const dateInput = row.querySelector('[data-child-field="FECHA"]');
+  const catorcenaInput = row.querySelector('[data-child-field="CATORCENA"]');
+  if (!dateInput || !catorcenaInput) return;
+  const catorcena = weedsCatorcenaForDate(dateInput.value);
+  catorcenaInput.value = catorcena ? String(catorcena.number) : '';
+  const hint = catorcenaInput.closest('.field').querySelector('.field-hint');
+  if (hint) {
+    hint.textContent = catorcena
+      ? 'Periodo ' + catorcena.period + ' · catorcena ' + catorcena.number + ' calculada por fecha.'
+      : 'Sin catorcena: fecha fuera del calendario disponible (20/10/2025 al 17/10/2027).';
+  }
 }
 function variacionAguilonFields() {
   return commonFields(true) + '<section class="form-section"><h2>Datos de Variación Aguilón</h2><div class="field-grid">' +
@@ -793,6 +827,7 @@ function addChildRow(key) {
   const list = $('[data-repeat-list="' + key + '"]', $('#form-fields'));
   if (!list) return;
   list.insertAdjacentHTML('beforeend', childRowMarkup(key, list.children.length));
+  if (key === 'malezas_detalle') updateWeedsCatorcena(list.lastElementChild);
 }
 function renderQualityDetails(type) {
   const target = $('#quality-details');
@@ -944,6 +979,7 @@ async function serializeForm(form, recordId) {
   const subregistros = {};
   for (const list of $$('[data-repeat-list]', $('#form-fields'))) {
     const key = list.dataset.repeatList;
+    if (key === 'malezas_detalle') $$('.child-row', list).forEach(updateWeedsCatorcena);
     subregistros[key] = await Promise.all($$('.child-row', list).map(async row => Object.fromEntries(await Promise.all($$('[data-child-field]', row).map(async input => [
       input.dataset.childField, input.type === 'file'
         ? await (input.multiple ? attachments(input.files) : attachment(input.files && input.files[0]))
@@ -1737,10 +1773,16 @@ document.addEventListener('change', event => {
 $('#capture-form').addEventListener('input', event => {
   if (event.target.matches('[data-lot-lookup]')) void updateLotLocations($('#form-fields'), false);
   if (event.target.matches('[data-farm-selector]')) updateZoneFromFarm($('#form-fields'));
+  if (state.currentModule === 'malezas' && event.target.matches('[data-child-field="FECHA"]')) {
+    updateWeedsCatorcena(event.target.closest('.child-row'));
+  }
 });
 $('#capture-form').addEventListener('change', event => {
   if (event.target.matches('[data-lot-lookup]')) void updateLotLocations($('#form-fields'), true);
   if (event.target.matches('[data-farm-selector]')) updateZoneFromFarm($('#form-fields'));
+  if (state.currentModule === 'malezas' && event.target.matches('[data-child-field="FECHA"]')) {
+    updateWeedsCatorcena(event.target.closest('.child-row'));
+  }
 });
 $('#form-fields').addEventListener('change', event => {
   if (event.target.id === 'pcpm-labor') renderPcpmDetails(event.target.value);

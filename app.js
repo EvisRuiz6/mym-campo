@@ -26,6 +26,24 @@ const eppFunctions = [
   { key: '7_ ENVASES', label: 'Envases', items: ['Guantes', 'Lentes'] },
   { key: '8_INVESTIGACIÓN', label: 'Investigación', items: ['Mascarilla con filtro de carbono', 'Overol impermeable/gabacha', 'Botas de hule', 'Guantes', 'Gorra', 'Lentes'] }
 ];
+const eppReportRoles = {
+  '1_MEZCLA': 'Personal de preparación de la mezcla y abastecedor',
+  '2_MONITOREO': 'Personal de monitoreo de calidad de aplicación',
+  '3_ENCARGADO': 'Personal encargado de aplicación',
+  '4_PILOTO DRON': 'Personal encargado de dron - Operario',
+  '5_APOYO DRON': 'Personal de apoyo de dron',
+  '6_ZONA SENSIBLE': 'Personal de monitoreo en zonas sensibles',
+  '7_ ENVASES': 'Personal que manipula envases vacíos',
+  '8_INVESTIGACIÓN': 'Personal de Investigación'
+};
+const eppOtherReportItems = [
+  'Utilización de tarjetas Hidrosensibles, en área sensible',
+  'Utilización de bandejas antiderrames',
+  'Utilización de rótulos de prevención de aplicación aérea',
+  'Perforación envases',
+  'Triple Lavado, en recipientes',
+  'Uso de jabón Neutro'
+];
 const qualityForms = {
   aguilon: {
     label: 'F.C. AGUILÓN',
@@ -960,6 +978,126 @@ function formatDate(date) {
 function recordStatus(record) {
   return record.syncStatus !== 'synced' ? 'En cola' : record.reviewStatus === 'approved' ? 'Aprobado' : record.reviewStatus === 'rejected' ? 'Rechazado' : 'Pendiente de revisión';
 }
+function eppReportCount(value) {
+  if (value === null || value === undefined || String(value).trim() === '') return '—';
+  const count = Number(value);
+  return Number.isFinite(count) ? esc(count) : esc(value);
+}
+function eppReportRoleRows(role, attendance, compliance) {
+  const items = role.items || [];
+  if (!items.length) return '';
+  const personCount = Object.prototype.hasOwnProperty.call(attendance, role.key)
+    ? eppReportCount(attendance[role.key])
+    : '—';
+  const itemCounts = compliance[role.key] && typeof compliance[role.key] === 'object'
+    ? compliance[role.key]
+    : {};
+  return '<tbody class="epp-report-group">' + items.map((item, index) => {
+    const roleCell = index === 0
+      ? '<td class="epp-report-role" rowspan="' + items.length + '">' + esc(eppReportRoles[role.key] || role.label) + '</td>'
+      : '';
+    const personCell = index === 0
+      ? '<td class="epp-report-number" rowspan="' + items.length + '">' + personCount + '</td>'
+      : '';
+    const itemCount = Object.prototype.hasOwnProperty.call(itemCounts, item) ? eppReportCount(itemCounts[item]) : '—';
+    return '<tr>' + roleCell + '<td class="epp-report-index">' + (index + 1) + '</td><td class="epp-report-item">' + esc(item) + '</td>' + personCell + '<td class="epp-report-number">' + itemCount + '</td></tr>';
+  }).join('') + '</tbody>';
+}
+function eppReportOtherRows() {
+  return '<tbody class="epp-report-group epp-report-other">' + eppOtherReportItems.map((item, index) => {
+    const roleCell = index === 0
+      ? '<td class="epp-report-role" rowspan="' + eppOtherReportItems.length + '">Otros</td>'
+      : '';
+    return '<tr>' + roleCell + '<td class="epp-report-index">' + (index + 1) + '</td><td class="epp-report-item" colspan="3">' + esc(item) + '</td></tr>';
+  }).join('') + '</tbody>';
+}
+function eppReportDocument(record) {
+  const data = record.datos || {};
+  const attendance = data.asistencia_por_funcion && typeof data.asistencia_por_funcion === 'object' && !Array.isArray(data.asistencia_por_funcion)
+    ? data.asistencia_por_funcion
+    : {};
+  const compliance = data.cumplimiento_epp_por_funcion && typeof data.cumplimiento_epp_por_funcion === 'object' && !Array.isArray(data.cumplimiento_epp_por_funcion)
+    ? data.cumplimiento_epp_por_funcion
+    : {};
+  const groups = eppFunctions.map(role => eppReportRoleRows(role, attendance, compliance)).join('');
+  const date = data.fecha || data.FECHA;
+  const metadata = [
+    ['FECHA', date ? formatDate(date) : 'Sin fecha'],
+    ['Finca', data.finca || 'Sin finca'],
+    ['Lote', data.lote || data.id_lote || 'Sin lote'],
+    ['Zona', data.zona || data.ZONA || 'Sin zona'],
+    ['Labor', data.labor || 'Sin labor'],
+    ['Responsable', record.ownerName || data.responsable || 'Sin responsable'],
+    ['Hora', recordDetailTime(data.hora_registro) || 'Sin hora'],
+    ['Estado', recordStatus(record)]
+  ].map(([label, value]) => '<div class="epp-report-meta"><strong>' + esc(label) + ':</strong><span>' + esc(value) + '</span></div>').join('');
+  const filename = 'EPP-' + slug(data.finca || data.lote || 'captura') + '-' + String(date || localDate()).replace(/[^0-9-]/g, '');
+  const styles = `
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #263342; font-family: Arial, Helvetica, sans-serif; font-size: 10px; }
+    .epp-report { width: 100%; margin: 0 auto; }
+    .epp-report-header { position: relative; text-align: center; padding: 4px 76px 15px; }
+    .epp-report-title { margin: 0; color: #315b92; font-size: 21px; font-weight: 700; letter-spacing: .5px; }
+    .epp-report-brand { position: absolute; top: 0; right: 2px; color: #42a846; font-size: 11px; font-weight: 800; line-height: 1.05; text-align: center; }
+    .epp-report-meta-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px 18px; margin: 6px 0 15px; }
+    .epp-report-meta { display: flex; gap: 5px; min-width: 0; border-bottom: 1px solid #546477; padding: 3px 2px; }
+    .epp-report-meta strong { white-space: nowrap; }
+    .epp-report-meta span { overflow-wrap: anywhere; }
+    .epp-report-section-title { margin: 0 0 9px; padding: 7px 6px; background: #bdbdbd; color: #3c628a; text-align: center; font-size: 11px; font-weight: 700; }
+    .epp-report-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 9px; }
+    .epp-report-table col:nth-child(1) { width: 21%; }
+    .epp-report-table col:nth-child(2) { width: 4%; }
+    .epp-report-table col:nth-child(3) { width: 32%; }
+    .epp-report-table col:nth-child(4) { width: 21.5%; }
+    .epp-report-table col:nth-child(5) { width: 21.5%; }
+    .epp-report-table th, .epp-report-table td { border: 1px solid #333; padding: 4px 5px; vertical-align: middle; overflow-wrap: anywhere; }
+    .epp-report-table th { height: 46px; background: #bdbdbd; color: #3c628a; text-align: center; font-size: 9px; line-height: 1.3; }
+    .epp-report-role { font-weight: 700; line-height: 1.35; }
+    .epp-report-index, .epp-report-number { text-align: center; }
+    .epp-report-item { font-weight: 600; }
+    .epp-report-group:nth-of-type(even) { background: #e1e1e1; }
+    .epp-report-group { break-inside: avoid; page-break-inside: avoid; }
+    .epp-report-note { margin-top: 8px; color: #536158; font-size: 8px; line-height: 1.4; }
+    @page { size: letter portrait; margin: 11mm; }
+    @media print {
+      body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+      .epp-report-header, .epp-report-section-title { break-after: avoid-page; }
+      .epp-report-table thead { display: table-header-group; }
+      .epp-report-table tr { break-inside: avoid; page-break-inside: avoid; }
+    }
+  `;
+  return '<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>' + esc(filename) + '</title><style>' + styles + '</style></head><body><main class="epp-report">' +
+    '<header class="epp-report-header"><h1 class="epp-report-title">APLICACIONES AÉREAS 2025-2026</h1><div class="epp-report-brand">MADRE<br>TIERRA</div></header>' +
+    '<section class="epp-report-meta-grid">' + metadata + '</section>' +
+    '<h2 class="epp-report-section-title">Uso de equipo de protección personal aplicaciones con dron</h2>' +
+    '<table class="epp-report-table"><colgroup><col><col><col><col><col></colgroup><thead><tr><th>Puesto</th><th>No.</th><th>Equipo de Protección</th><th>Número de personas que forman parte de la aplicación</th><th>Número de equipos de protección personal</th></tr></thead>' +
+    groups + eppReportOtherRows() + '</table><p class="epp-report-note">Las cantidades de la tabla reflejan los valores capturados por función y por elemento de EPP. Los registros en cola aún no se han sincronizado; el estado de revisión se indica arriba.</p></main></body></html>';
+}
+async function generateEppPdf(recordId) {
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) {
+    toast('Permite las ventanas emergentes para generar el PDF.');
+    return;
+  }
+  try {
+    const record = await getRecord(recordId);
+    if (!record || record.tipo !== 'epp' || !visibleLocalRecords([record]).length) {
+      printWindow.close();
+      toast('Este registro EPP no está disponible para tu perfil.');
+      return;
+    }
+    printWindow.document.open();
+    printWindow.document.write(eppReportDocument(record));
+    printWindow.document.close();
+    printWindow.focus();
+    window.setTimeout(() => {
+      if (!printWindow.closed) printWindow.print();
+    }, 350);
+  } catch (error) {
+    printWindow.close();
+    throw error;
+  }
+}
 function recordDetailLabel(key) {
   const label = String(key).replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').trim();
   return label ? label.charAt(0).toLocaleUpperCase('es') + label.slice(1) : 'Dato';
@@ -1046,7 +1184,8 @@ function recordRow(record) {
     ? '<span class="record-review-actions"><button type="button" data-review="approved" data-record-id="' + esc(record.id) + '">Aprobar</button><button type="button" data-review="rejected" data-record-id="' + esc(record.id) + '">Rechazar</button></span>'
     : '';
   const viewAction = '<button type="button" class="record-view-button" data-view-record="' + esc(record.id) + '" aria-label="Ver datos de ' + esc(titleFor(record)) + '">Ver datos</button>';
-  return '<article class="record-row"><span class="record-symbol" aria-hidden="true">' + module.icon + '</span><span class="record-info"><strong>' + esc(titleFor(record)) + '</strong><small>' + esc(detail) + '</small></span><span class="record-status">' + esc(status) + '</span>' + viewAction + actions + '</article>';
+  const pdfAction = record.tipo === 'epp' ? '<button type="button" class="record-view-button" data-epp-pdf="' + esc(record.id) + '" aria-label="Generar PDF de ' + esc(titleFor(record)) + '">Generar PDF</button>' : '';
+  return '<article class="record-row"><span class="record-symbol" aria-hidden="true">' + module.icon + '</span><span class="record-info"><strong>' + esc(titleFor(record)) + '</strong><small>' + esc(detail) + '</small></span><span class="record-status">' + esc(status) + '</span>' + viewAction + pdfAction + actions + '</article>';
 }
 function emptyState(message) { return '<div class="empty-state">' + esc(message) + '</div>'; }
 async function refreshLists() {
@@ -1298,6 +1437,14 @@ document.addEventListener('click', event => {
     showRecordDetails(viewRecord.dataset.viewRecord).catch(error => {
       console.error(error);
       toast('No se pudo cargar la información de la captura.');
+    });
+    return;
+  }
+  const eppPdfButton = event.target.closest('[data-epp-pdf]');
+  if (eppPdfButton) {
+    generateEppPdf(eppPdfButton.dataset.eppPdf).catch(error => {
+      console.error(error);
+      toast('No se pudo generar el PDF de la captura EPP.');
     });
     return;
   }

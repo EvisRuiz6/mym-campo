@@ -8,6 +8,8 @@ La aplicación conserva su interfaz estática y el almacenamiento local IndexedD
 
 Las capturas nuevas se guardan primero en el dispositivo y se envían cuando vuelve la conexión. Cada perfil solo puede abrir sus formularios asignados, y PostgreSQL valida el mismo permiso al recibir capturas: Aplicaciones aéreas usa Clima, EPP y Vuelos; Terrestre usa Variación Aguilón y Calibraciones; Supervisor usa Malezas y Calidad; Administrador puede usar todos. Administradores y usuarios de Aplicaciones aéreas tienen acceso a todas las zonas; Terrestre y Supervisor necesitan zonas asignadas. Las zonas disponibles se derivan de las fincas y lotes registrados en `field_lots`, tanto en la administración como en la validación del servidor. Supervisores y administradores pueden revisar capturas del equipo dentro de su alcance; cada usuario también puede consultar sus propios registros dentro de las zonas permitidas. Las solicitudes públicas quedan pendientes; las cuentas creadas por administradores reciben inmediatamente el perfil y las zonas elegidas.
 
+En **Registros**, las capturas EPP incluyen **Generar PDF**. La opción abre la vista de impresión del navegador para imprimir o guardar el reporte como PDF; incluye los conteos de asistencia y cumplimiento por función, los datos de la captura y el estado de sincronización/revisión.
+
 **La sincronización no queda activa con este cambio por sí solo.** Es necesario crear y configurar el proyecto Supabase, aplicar la migración y proporcionar su URL y clave pública. No se creó ningún servicio ni se desplegó la aplicación.
 
 ## Configuración

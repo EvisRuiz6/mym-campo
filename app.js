@@ -702,7 +702,8 @@ function weedsFields() {
   const farmOptions = [...new Set(Object.values(state.lotLookup).map(location => location.finca).filter(Boolean))].sort();
   return '<section class="form-section"><h2>Visita de malezas</h2><p class="field-hint">Campos de la tabla Visita Malezas. El ID se genera al guardar la captura.</p><div class="field-grid">' +
     fieldMarkup({ label: 'FECHA', name: 'FECHA', type: 'date', value: localDate(), required: true }, 'weeds-date', true) +
-    fieldMarkup({ label: 'UBICACIÓN', name: 'UBICACIÓN', placeholder: 'Latitud, longitud', hint: 'La hoja de origen guarda las coordenadas en este campo.' }, 'weeds-location', true) +
+    fieldMarkup({ label: 'UBICACIÓN', name: 'UBICACIÓN', placeholder: 'Latitud, longitud', hint: 'Se solicitará el GPS al abrir el formulario; puedes editar las coordenadas.' }, 'weeds-location', true) +
+    '<div class="field full"><div class="location-controls"><span id="weeds-location-status" class="field-hint" role="status">Esperando permiso de ubicación…</span><button id="weeds-retry-location" class="add-row" type="button">Actualizar ubicación</button></div></div>' +
     fieldMarkup({ label: 'RESPONSABLE', name: 'RESPONSABLE', value: state.user.displayName }, 'weeds-owner', true) +
     fieldMarkup({ label: 'ZONA', name: 'ZONA', placeholder: 'Se completa al seleccionar la finca', locationTarget: 'zona', farmZoneTarget: true }, 'weeds-zone', true) +
     fieldMarkup({ label: 'FINCA', name: 'FINCA', type: 'select', locationTarget: 'finca', farmSelector: true, options: farmOptions }, 'weeds-farm', true) +
@@ -774,6 +775,35 @@ function updateWeedsCatorcena(row) {
       : 'Sin catorcena: fecha fuera del calendario disponible (20/10/2025 al 17/10/2027).';
   }
 }
+function syncWeedsDetailDates(rows, dateValue) {
+  for (const row of rows) {
+    const dateInput = row.querySelector('[data-child-field="FECHA"]');
+    if (!dateInput || dateInput.dataset.visitDateManual === 'true') continue;
+    const linkedDate = dateInput.dataset.visitDateValue;
+    if (linkedDate !== undefined && dateInput.value !== linkedDate) {
+      delete dateInput.dataset.visitDateValue;
+      dateInput.dataset.visitDateManual = 'true';
+      continue;
+    }
+    if (linkedDate === undefined && dateInput.value) continue;
+    dateInput.value = dateValue;
+    dateInput.dataset.visitDateValue = dateValue;
+    updateWeedsCatorcena(row);
+  }
+}
+function updateWeedsDatesForInput(input) {
+  if (input.matches('[name="FECHA"]')) {
+    const list = $('[data-repeat-list="malezas_detalle"]', $('#form-fields'));
+    if (list) syncWeedsDetailDates($$('.child-row', list), input.value);
+    return;
+  }
+  if (!input.matches('[data-child-field="FECHA"]')) return;
+  if (input.dataset.visitDateValue !== undefined && input.value !== input.dataset.visitDateValue) {
+    delete input.dataset.visitDateValue;
+    input.dataset.visitDateManual = 'true';
+  }
+  updateWeedsCatorcena(input.closest('.child-row'));
+}
 function variacionAguilonFields() {
   return commonFields(true) + '<section class="form-section"><h2>Datos de Variación Aguilón</h2><div class="field-grid">' +
     fieldMarkup({ label: 'Lote', name: 'lote', lotLookup: true }, 'var-lote', true) +
@@ -827,7 +857,16 @@ function addChildRow(key) {
   const list = $('[data-repeat-list="' + key + '"]', $('#form-fields'));
   if (!list) return;
   list.insertAdjacentHTML('beforeend', childRowMarkup(key, list.children.length));
-  if (key === 'malezas_detalle') updateWeedsCatorcena(list.lastElementChild);
+  if (key === 'malezas_detalle') {
+    const row = list.lastElementChild;
+    const visitDate = $('#form-fields [name="FECHA"]');
+    const detailDate = row.querySelector('[data-child-field="FECHA"]');
+    if (visitDate && detailDate) {
+      detailDate.value = visitDate.value;
+      detailDate.dataset.visitDateValue = visitDate.value;
+    }
+    updateWeedsCatorcena(row);
+  }
 }
 function renderQualityDetails(type) {
   const target = $('#quality-details');
@@ -898,6 +937,10 @@ function chooseModule(key) {
     $('#weather-rows').addEventListener('click', event => { if (event.target.matches('.remove-row')) event.target.closest('.repeat-row').remove(); });
     $('#retry-location').addEventListener('click', captureLocation);
     captureLocation();
+  }
+  if (key === 'malezas') {
+    $('#weeds-retry-location').addEventListener('click', captureWeedsLocation);
+    captureWeedsLocation();
   }
   if (key === 'epp') {
     const updateEppSummary = () => {
@@ -1200,6 +1243,25 @@ function normalizeVisitMapLotCode(value) {
   const code = String(value == null ? '' : value).trim();
   return /^\d{1,7}$/.test(code) ? code.padStart(7, '0') : code;
 }
+function visitMapControlPercent(value) {
+  if (typeof value !== 'number' && typeof value !== 'string') return null;
+  const normalized = typeof value === 'string' ? value.trim().replace(/%$/, '').trim().replace(',', '.') : value;
+  if (normalized === '') return null;
+  const percent = Number(normalized);
+  return Number.isFinite(percent) && percent >= 0 && percent <= 100 ? percent : null;
+}
+function formatVisitMapControlPercent(percent) {
+  return Number(percent.toFixed(2)).toString() + '%';
+}
+function visitMapControlClass(stats) {
+  if (!stats) return '';
+  const percent = stats.latestControlPercent;
+  if (!Number.isFinite(percent)) return ' is-visited control-missing';
+  if (percent < 25) return ' is-visited control-low';
+  if (percent < 50) return ' is-visited control-medium-low';
+  if (percent < 75) return ' is-visited control-medium-high';
+  return ' is-visited control-high';
+}
 function visitStatsByLot(records) {
   const stats = new Map();
   for (const record of records) {
@@ -1214,17 +1276,33 @@ function visitStatsByLot(records) {
       const code = normalizeVisitMapLotCode(detail.LOTE == null ? detail.lote : detail.LOTE);
       if (!code) continue;
       const date = String(detail.FECHA || data.FECHA || data.fecha || record.createdAt || '');
-      const previousDate = recordLots.get(code);
-      if (!previousDate || date > previousDate) recordLots.set(code, date);
+      const sample = { date, controlPercent: visitMapControlPercent(detail['% CONTROL']) };
+      const previous = recordLots.get(code);
+      if (!previous || date >= previous.date) recordLots.set(code, sample);
     }
     if (!recordLots.size) {
       const code = normalizeVisitMapLotCode(data.LOTE == null ? data.lote : data.LOTE);
-      if (code) recordLots.set(code, String(data.FECHA || data.fecha || record.createdAt || ''));
+      if (code) {
+        recordLots.set(code, {
+          date: String(data.FECHA || data.fecha || record.createdAt || ''),
+          controlPercent: visitMapControlPercent(data['% CONTROL'])
+        });
+      }
     }
-    for (const [code, date] of recordLots) {
-      const lotStats = stats.get(code) || { visits: 0, latestDate: '', owners: new Set() };
+    for (const [code, sample] of recordLots) {
+      const lotStats = stats.get(code) || {
+        visits: 0,
+        latestDate: '',
+        latestSampleDate: '',
+        latestControlPercent: null,
+        owners: new Set()
+      };
       lotStats.visits += 1;
-      if (date && date > lotStats.latestDate) lotStats.latestDate = date;
+      if (sample.date && sample.date > lotStats.latestDate) lotStats.latestDate = sample.date;
+      if (!lotStats.latestSampleDate || sample.date >= lotStats.latestSampleDate) {
+        lotStats.latestSampleDate = sample.date;
+        lotStats.latestControlPercent = sample.controlPercent;
+      }
       const owner = String(record.ownerName || data.RESPONSABLE || data.responsable || '').trim();
       if (owner) lotStats.owners.add(owner);
       stats.set(code, lotStats);
@@ -1310,8 +1388,12 @@ function renderVisitMap(boundaries, visits) {
   const lotMetadata = new Map();
   const paths = lots.map(lot => {
     const stats = visits.get(lot.lot_code);
-    const label = lot.lot_code + ' · ' + (lot.finca || 'Finca sin nombre') + ' · Zona ' + lot.zone +
-      (stats ? ' · ' + stats.visits + ' visitas' : ' · Sin visitas');
+    const visitLabel = !stats
+      ? ' · Sin muestreo'
+      : ' · ' + stats.visits + (stats.visits === 1 ? ' visita' : ' visitas') +
+        (stats.latestControlPercent == null ? ' · Sin % de control' : ' · Control ' + formatVisitMapControlPercent(stats.latestControlPercent)) +
+        (stats.latestDate ? ' · Último muestreo ' + formatDate(String(stats.latestDate).slice(0, 10)) : '');
+    const label = lot.lot_code + ' · ' + (lot.finca || 'Finca sin nombre') + ' · Zona ' + lot.zone + visitLabel;
     const path = lot.rings.map(ring => {
       const first = project(ring[0]);
       return 'M ' + first[0].toFixed(1) + ' ' + first[1].toFixed(1) + ' ' +
@@ -1321,24 +1403,30 @@ function renderVisitMap(boundaries, visits) {
         }).join(' ') + ' Z';
     }).join(' ');
     lotMetadata.set(lot.lot_code, { lot_code: lot.lot_code, zone: lot.zone, finca: lot.finca });
-    return '<path class="visit-map-lot' + (stats ? ' is-visited' : '') + '" data-visit-lot="' + esc(lot.lot_code) +
+    return '<path class="visit-map-lot' + visitMapControlClass(stats) + '" data-visit-lot="' + esc(lot.lot_code) +
       '" d="' + path + '" fill-rule="evenodd" tabindex="0" role="button" aria-label="' + esc(label) +
       '"><title>' + esc(label) + '</title></path>';
   }).join('');
   const visitedLots = lots.filter(lot => visits.has(lot.lot_code)).length;
+  const lotsWithControl = lots.filter(lot => {
+    const stats = visits.get(lot.lot_code);
+    return stats && stats.latestControlPercent != null;
+  }).length;
   const totalVisits = lots.reduce((total, lot) => total + (visits.get(lot.lot_code) ? visits.get(lot.lot_code).visits : 0), 0);
   const unmatchedVisits = [...visits.keys()].filter(code => !lotMetadata.has(code)).length;
   state.visitMap = { lots: lotMetadata, visits };
-  summary.textContent = visitedLots + ' de ' + lots.length + ' lotes con visita · ' +
-    totalVisits + (totalVisits === 1 ? ' visita registrada' : ' visitas registradas');
-  detail.textContent = 'Selecciona un lote para consultar sus visitas.';
+  summary.textContent = visitedLots + ' de ' + lots.length + ' lotes muestreados · ' +
+    totalVisits + (totalVisits === 1 ? ' visita registrada' : ' visitas registradas') +
+    ' · ' + lotsWithControl + ' con % de control';
+  detail.textContent = 'Selecciona un lote para consultar su último porcentaje de control.';
   stage.innerHTML = '<svg class="visit-map-svg" viewBox="0 0 ' + width + ' ' + height +
-    '" role="group" aria-label="Límites de lotes; los lotes verdes tienen visitas">' + paths + '</svg>';
+    '" role="group" aria-label="Límites de lotes; el color indica el último porcentaje de control registrado">' + paths + '</svg>';
   legend.hidden = false;
   const notices = [];
   if (skipped) notices.push(skipped + ' geometrías inválidas o fuera de zona se omitieron.');
   if (unmatchedVisits) notices.push(unmatchedVisits + ' lotes visitados no tienen geometría importada.');
-  $('#visit-map-status').textContent = notices.join(' ') || 'Selecciona un lote en el mapa para ver el detalle.';
+  $('#visit-map-status').textContent = (notices.length ? notices.join(' ') + ' ' : '') +
+    'El color representa el % CONTROL del muestreo más reciente.';
 }
 async function loadVisitMapBoundaries() {
   const boundaries = [];
@@ -1359,7 +1447,10 @@ function selectVisitMapLot(lotCode) {
   const details = [lot.lot_code, lot.finca || 'Finca sin nombre', 'Zona ' + lot.zone];
   if (stats) {
     details.push(stats.visits + (stats.visits === 1 ? ' visita' : ' visitas'));
-    details.push('Última visita: ' + (stats.latestDate ? formatDate(stats.latestDate) : 'Sin fecha'));
+    details.push('Último muestreo: ' + (stats.latestDate ? formatDate(String(stats.latestDate).slice(0, 10)) : 'Sin fecha'));
+    details.push('Control de maleza: ' + (stats.latestControlPercent == null
+      ? 'Sin dato'
+      : formatVisitMapControlPercent(stats.latestControlPercent)));
     if (stats.owners.size) details.push('Responsables: ' + [...stats.owners].sort((a, b) => a.localeCompare(b, 'es')).join(', '));
   } else {
     details.push('Sin visitas registradas');
@@ -1371,19 +1462,19 @@ function selectVisitMapLot(lotCode) {
 }
 async function openVisitMap() {
   if (!state.user || !['admin', 'supervisor'].includes(state.user.role)) {
-    toast('El mapa de visitas está disponible para supervisores y administradores.');
+    toast('El mapa de muestreos está disponible para supervisores y administradores.');
     return;
   }
   const dialog = $('#visit-map-dialog');
   if (typeof dialog.showModal !== 'function') {
-    toast('Este navegador no permite abrir el mapa de visitas.');
+    toast('Este navegador no permite abrir el mapa de muestreos.');
     return;
   }
   if (!dialog.open) dialog.showModal();
   const button = $('#open-visit-map');
   button.disabled = true;
   $('#visit-map-summary').textContent = '';
-  $('#visit-map-status').textContent = 'Cargando los lotes y las visitas autorizadas…';
+  $('#visit-map-status').textContent = 'Cargando los lotes y muestreos autorizados…';
   $('#visit-map-detail').textContent = '';
   $('#visit-map-stage').innerHTML = '';
   $('#visit-map-legend').hidden = true;
@@ -1392,17 +1483,17 @@ async function openVisitMap() {
     if (!navigator.onLine) throw new Error('Conéctate a internet para cargar los límites protegidos.');
     const [boundaries, records] = await Promise.all([loadVisitMapBoundaries(), getRecords()]);
     if (!state.user || !['admin', 'supervisor'].includes(state.user.role)) {
-      throw new Error('Tu perfil ya no tiene acceso al mapa de visitas.');
+      throw new Error('Tu perfil ya no tiene acceso al mapa de muestreos.');
     }
     const visibleRecords = visibleLocalRecords(records).filter(record => record.tipo === 'malezas');
     renderVisitMap(boundaries, visitStatsByLot(visibleRecords));
   } catch (error) {
-    console.error('No se pudo cargar el mapa de visitas.', error);
+    console.error('No se pudo cargar el mapa de muestreos.', error);
     state.visitMap = null;
     $('#visit-map-summary').textContent = '';
     $('#visit-map-detail').textContent = '';
     $('#visit-map-legend').hidden = true;
-    $('#visit-map-stage').innerHTML = emptyState('No se pudo cargar el mapa de visitas.');
+    $('#visit-map-stage').innerHTML = emptyState('No se pudo cargar el mapa de muestreos.');
     $('#visit-map-status').textContent = error.message || 'Ocurrió un error al cargar los lotes y visitas.';
   } finally {
     button.disabled = false;
@@ -1493,6 +1584,40 @@ function captureLocation() {
   }, error => {
     if (!input.isConnected) return;
     status.textContent = error.code === 1 ? 'Permite la ubicación para este sitio y vuelve a intentarlo.' : error.code === 3 ? 'El GPS tardó demasiado. Pulsa “Actualizar ubicación” para reintentar.' : 'No se pudo obtener el GPS. Revisa el dispositivo y vuelve a intentarlo.';
+    button.disabled = false;
+  }, { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
+}
+function captureWeedsLocation() {
+  const input = $('#form-fields [name="UBICACIÓN"]');
+  const status = $('#weeds-location-status');
+  const button = $('#weeds-retry-location');
+  if (!input || !status || !button) return;
+  if (!navigator.geolocation) {
+    status.textContent = 'Este navegador no permite obtener la ubicación automática; ingresa las coordenadas manualmente.';
+    return;
+  }
+  const previousGpsValue = input.dataset.gpsValue || '';
+  button.disabled = true;
+  status.textContent = 'Buscando GPS; permite el acceso si el navegador lo solicita…';
+  navigator.geolocation.getCurrentPosition(position => {
+    if (!input.isConnected) return;
+    const coords = position.coords;
+    const gpsValue = coords.latitude.toFixed(6) + ', ' + coords.longitude.toFixed(6);
+    if (!input.value || input.value === previousGpsValue) {
+      input.value = gpsValue;
+      input.dataset.gpsValue = gpsValue;
+      status.textContent = 'Ubicación GPS capturada; precisión aproximada: ' + Math.round(coords.accuracy) + ' m.';
+    } else {
+      status.textContent = 'Se obtuvo la ubicación GPS, pero se conservó la ubicación escrita manualmente.';
+    }
+    button.disabled = false;
+  }, error => {
+    if (!input.isConnected) return;
+    status.textContent = error.code === 1
+      ? 'Permite la ubicación para este sitio o ingresa las coordenadas manualmente.'
+      : error.code === 3
+        ? 'El GPS tardó demasiado. Pulsa “Actualizar ubicación” para reintentar o ingresa las coordenadas.'
+        : 'No se pudo obtener el GPS. Revisa el dispositivo o ingresa las coordenadas manualmente.';
     button.disabled = false;
   }, { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
 }
@@ -1773,16 +1898,12 @@ document.addEventListener('change', event => {
 $('#capture-form').addEventListener('input', event => {
   if (event.target.matches('[data-lot-lookup]')) void updateLotLocations($('#form-fields'), false);
   if (event.target.matches('[data-farm-selector]')) updateZoneFromFarm($('#form-fields'));
-  if (state.currentModule === 'malezas' && event.target.matches('[data-child-field="FECHA"]')) {
-    updateWeedsCatorcena(event.target.closest('.child-row'));
-  }
+  if (state.currentModule === 'malezas') updateWeedsDatesForInput(event.target);
 });
 $('#capture-form').addEventListener('change', event => {
   if (event.target.matches('[data-lot-lookup]')) void updateLotLocations($('#form-fields'), true);
   if (event.target.matches('[data-farm-selector]')) updateZoneFromFarm($('#form-fields'));
-  if (state.currentModule === 'malezas' && event.target.matches('[data-child-field="FECHA"]')) {
-    updateWeedsCatorcena(event.target.closest('.child-row'));
-  }
+  if (state.currentModule === 'malezas') updateWeedsDatesForInput(event.target);
 });
 $('#form-fields').addEventListener('change', event => {
   if (event.target.id === 'pcpm-labor') renderPcpmDetails(event.target.value);

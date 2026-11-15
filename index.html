@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#174b38">
   <meta name="description" content="Captura de labores aéreas y terrestres para MyM Data">
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="app.css?v=18">
+  <link rel="stylesheet" href="app.css?v=19">
   <title>MyM Campo</title>
 </head>
 <body>
@@ -134,7 +134,7 @@
         <section id="page-registros" class="page" hidden>
           <p class="eyebrow">REGISTROS COMPARTIDOS</p><h1>Registros</h1><p class="subtitle">Cada usuario ve sus capturas; supervisores y administradores pueden revisar las del equipo.</p>
           <p class="record-query-hint">Selecciona “Ver datos” para consultar la información completa de una captura guardada o sincronizada.</p>
-          <div class="record-toolbar"><label class="search-field">⌕ <input id="record-search" type="search" placeholder="Buscar por finca, actividad o responsable" aria-label="Buscar registros"></label><button id="open-visit-map" class="secondary-button" type="button" hidden>Mapa de visitas</button><button id="export-all" class="secondary-button" type="button">Exportar JSON</button></div>
+          <div class="record-toolbar"><label class="search-field">⌕ <input id="record-search" type="search" placeholder="Buscar por finca, actividad o responsable" aria-label="Buscar registros"></label><button id="open-visit-map" class="secondary-button" type="button" hidden>Mapa de muestreos</button><button id="export-all" class="secondary-button" type="button">Exportar JSON</button></div>
           <div id="all-records" class="record-list"></div>
         </section>
 
@@ -193,13 +193,17 @@
     <dialog id="visit-map-dialog" class="record-detail-dialog visit-map-dialog" aria-labelledby="visit-map-title">
       <div class="record-detail-card">
         <div class="record-detail-heading">
-          <div><p class="eyebrow">VISITAS DE MALEZAS POR LOTE</p><h2 id="visit-map-title">Mapa de visitas</h2></div>
+          <div><p class="eyebrow">MUESTREOS Y CONTROL DE MALEZAS POR LOTE</p><h2 id="visit-map-title">Mapa de lotes muestreados</h2></div>
           <form method="dialog"><button class="record-detail-close" type="submit" aria-label="Cerrar mapa">×</button></form>
         </div>
         <p id="visit-map-summary" class="record-detail-summary"></p>
         <div id="visit-map-legend" class="visit-map-legend" hidden>
-          <span><i class="visit-map-swatch is-visited" aria-hidden="true"></i> Con visita</span>
-          <span><i class="visit-map-swatch" aria-hidden="true"></i> Sin visita</span>
+          <span><i class="visit-map-swatch" aria-hidden="true"></i> Sin muestreo</span>
+          <span><i class="visit-map-swatch control-missing" aria-hidden="true"></i> Sin %</span>
+          <span><i class="visit-map-swatch control-low" aria-hidden="true"></i> Menos de 25%</span>
+          <span><i class="visit-map-swatch control-medium-low" aria-hidden="true"></i> 25 a menos de 50%</span>
+          <span><i class="visit-map-swatch control-medium-high" aria-hidden="true"></i> 50 a menos de 75%</span>
+          <span><i class="visit-map-swatch control-high" aria-hidden="true"></i> 75-100%</span>
         </div>
         <div id="visit-map-stage" class="visit-map-stage"></div>
         <p id="visit-map-detail" class="visit-map-detail" role="status" aria-live="polite"></p>
@@ -211,6 +215,6 @@
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </div>
   <script src="config.js"></script>
-  <script src="app.js?v=33"></script>
+  <script src="app.js?v=34"></script>
 </body>
 </html>

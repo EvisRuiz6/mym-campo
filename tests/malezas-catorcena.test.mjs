@@ -8,7 +8,7 @@ const helperStart = appSource.indexOf('function weedsCatorcenaForDate(value) {')
 const helperEnd = appSource.indexOf('\nfunction variacionAguilonFields()', helperStart);
 assert.ok(helperStart >= 0 && helperEnd > helperStart, 'Malezas catorcena helpers must exist in app.js');
 const helpers = runInNewContext(
-  appSource.slice(helperStart, helperEnd) + '\n({ weedsCatorcenaForDate, updateWeedsCatorcena })'
+  appSource.slice(helperStart, helperEnd) + '\n({ weedsCatorcenaForDate, updateWeedsCatorcena, syncWeedsDetailDates })'
 );
 
 test('maps the supplied period boundaries and 14-day catorcena starts', () => {
@@ -62,4 +62,36 @@ test('updates the catorcena field and clears it outside the calendar', () => {
   helpers.updateWeedsCatorcena(row);
   assert.equal(catorcenaInput.value, '');
   assert.match(hint.textContent, /fuera del calendario/);
+});
+
+test('follows the visit date for linked details but preserves manually changed dates', () => {
+  function makeRow(date, number, linkedDate, manuallyEdited) {
+    const dateInput = { value: date, dataset: {} };
+    if (linkedDate !== undefined) dateInput.dataset.visitDateValue = linkedDate;
+    if (manuallyEdited) dateInput.dataset.visitDateManual = 'true';
+    const hint = { textContent: '' };
+    const catorcenaInput = {
+      value: number,
+      closest: () => ({ querySelector: () => hint })
+    };
+    const row = {
+      querySelector(selector) {
+        if (selector === '[data-child-field="FECHA"]') return dateInput;
+        if (selector === '[data-child-field="CATORCENA"]') return catorcenaInput;
+        return null;
+      }
+    };
+    return { row, dateInput, catorcenaInput };
+  }
+
+  const linked = makeRow('2025-11-02', '1', '2025-11-02');
+  const edited = makeRow('2025-11-10', '2', '2025-11-02');
+  const cleared = makeRow('', '', undefined, true);
+  helpers.syncWeedsDetailDates([linked.row, edited.row, cleared.row], '2025-11-03');
+
+  assert.equal(linked.dateInput.value, '2025-11-03');
+  assert.equal(linked.catorcenaInput.value, '2');
+  assert.equal(edited.dateInput.value, '2025-11-10');
+  assert.equal(edited.dateInput.dataset.visitDateManual, 'true');
+  assert.equal(cleared.dateInput.value, '');
 });

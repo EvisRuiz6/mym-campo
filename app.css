@@ -168,12 +168,21 @@ dialog::backdrop { background: #17241c88; }
 .visit-map-legend { display: flex; flex-wrap: wrap; gap: 14px; color: var(--muted); font-size: 11px; margin: 0 0 12px; }
 .visit-map-legend span { display: inline-flex; align-items: center; gap: 6px; }
 .visit-map-swatch { display: inline-block; width: 12px; height: 12px; border: 1px solid #9aa99e; border-radius: 3px; background: #f4f6f3; }
-.visit-map-swatch.is-visited { background: #9bc99d; border-color: #447f51; }
+.visit-map-swatch.control-missing { background: #b9c9d2; border-color: #657b85; }
+.visit-map-swatch.control-low { background: #de9b91; border-color: #9f493f; }
+.visit-map-swatch.control-medium-low { background: #e8b37d; border-color: #9b672e; }
+.visit-map-swatch.control-medium-high { background: #e4d27f; border-color: #82702b; }
+.visit-map-swatch.control-high { background: #93bf96; border-color: #3e7048; }
 .visit-map-stage { min-height: 180px; overflow: auto; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
 .visit-map-svg { display: block; width: 100%; height: auto; }
 .visit-map-lot { fill: #f4f6f3; stroke: #9aa99e; stroke-width: 1; vector-effect: non-scaling-stroke; cursor: pointer; transition: fill .12s, stroke .12s; }
-.visit-map-lot.is-visited { fill: #9bc99d; fill-opacity: .9; stroke: #447f51; }
-.visit-map-lot.is-selected, .visit-map-lot:focus { fill: #f0d07a; stroke: #5a4720; stroke-width: 2; outline: none; }
+.visit-map-lot.is-visited { fill-opacity: .9; }
+.visit-map-lot.control-missing { fill: #b9c9d2; stroke: #657b85; }
+.visit-map-lot.control-low { fill: #de9b91; stroke: #9f493f; }
+.visit-map-lot.control-medium-low { fill: #e8b37d; stroke: #9b672e; }
+.visit-map-lot.control-medium-high { fill: #e4d27f; stroke: #82702b; }
+.visit-map-lot.control-high { fill: #93bf96; stroke: #3e7048; }
+.visit-map-lot.is-selected, .visit-map-lot:focus { stroke: #5a4720; stroke-width: 2; outline: none; }
 .visit-map-detail { min-height: 18px; margin: 13px 0 0; color: var(--ink); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 @media (max-width: 760px) {
   .topbar { height: 64px; padding: 0 17px; }

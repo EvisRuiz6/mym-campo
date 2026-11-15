@@ -111,7 +111,7 @@ const childSchemas = {
     { label: 'LABOR', key: 'LABOR' },
     { label: '% CONTROL', key: '% CONTROL', type: 'number', step: '0.01', min: '0', max: '100' },
     { label: '% COBERTURA', key: '% COBERTURA', type: 'number', step: '0.01', min: '0', max: '100' },
-    { label: 'IMAGEN', key: 'IMAGEN', type: 'file', accept: 'image/*', full: true },
+    { label: 'IMÁGENES', key: 'IMAGEN', type: 'file', accept: 'image/*', multiple: true, hint: 'Puedes seleccionar una o varias imágenes para este lote.', full: true },
     { label: 'CATORCENA', key: 'CATORCENA', type: 'number', step: '1' },
     { label: 'OBSERVACIONES', key: 'OBSERVACIONES', type: 'textarea', full: true }
   ],
@@ -213,7 +213,7 @@ const childSchemas = {
 };
 const $ = (selector, root) => (root || document).querySelector(selector);
 const $$ = (selector, root) => [...(root || document).querySelectorAll(selector)];
-const state = { db: null, user: null, authSession: null, configured: false, syncConnected: false, syncBusy: false, refreshPromise: null, currentModule: null, recordTimeTimer: null, lotLookup: Object.create(null), lotLookupRequests: new Map(), zoneOptions: [], acceptingInvite: false };
+const state = { db: null, user: null, authSession: null, configured: false, syncConnected: false, syncBusy: false, refreshPromise: null, currentModule: null, recordTimeTimer: null, lotLookup: Object.create(null), lotLookupRequests: new Map(), zoneOptions: [], visitMap: null, acceptingInvite: false };
 
 function lotLookupCacheKey() {
   const scopeKey = [state.user.role, ...(state.user.allowedZones || []).slice().sort()].join(':');
@@ -552,6 +552,7 @@ function fieldMarkup(field, prefix, includeName) {
   const min = field.min != null ? ' min="' + esc(field.min) + '"' : '';
   const max = field.max != null ? ' max="' + esc(field.max) + '"' : '';
   const accept = field.accept ? ' accept="' + esc(field.accept) + '"' : '';
+  const multiple = field.multiple && field.type === 'file' ? ' multiple' : '';
   const readonly = field.readonly ? ' readonly' : '';
   let control = '';
   if (field.lotLookup) {
@@ -575,7 +576,7 @@ function fieldMarkup(field, prefix, includeName) {
     const inputMode = type === 'number' ? ' inputmode="decimal"' : '';
     const value = field.value != null ? ' value="' + esc(field.value) + '"' : '';
     const placeholder = field.calculated ? ' placeholder="Resultado de la hoja; fórmula pendiente de confirmar"' : field.placeholder ? ' placeholder="' + esc(field.placeholder) + '"' : '';
-    control = '<input id="' + esc(id) + '" type="' + esc(type) + '"' + fieldAttributes + ' class="text-input"' + required + step + min + max + accept + inputMode + value + placeholder + readonly + '>';
+    control = '<input id="' + esc(id) + '" type="' + esc(type) + '"' + fieldAttributes + ' class="text-input"' + required + step + min + max + accept + multiple + inputMode + value + placeholder + readonly + '>';
   }
   const hint = field.calculated ? '<div class="field-hint">Campo calculado en AppSheet; queda capturable hasta validar su fórmula.</div>' : field.hint ? '<div class="field-hint">' + esc(field.hint) + '</div>' : field.lotLookup ? '<div class="field-hint">Ingresa los 7 dígitos o selecciónalos de la lista; finca y zona se completan automáticamente.</div>' : '';
   return '<div class="field' + (field.full ? ' full' : '') + '"><label class="field-label" for="' + esc(id) + '">' + esc(field.label) + (field.required ? ' *' : '') + '</label>' + control + hint + '</div>';
@@ -698,14 +699,15 @@ function climateFields() {
     '<section class="form-section"><h2>Lecturas de clima</h2><p class="field-hint">Añade una fila por medición. Unidades: °C, %, km/h y °C para Delta T.</p><div id="weather-rows"></div><div class="inline-actions"><button id="add-weather" class="add-row" type="button">＋ Agregar lectura</button></div></section>';
 }
 function weedsFields() {
+  const farmOptions = [...new Set(Object.values(state.lotLookup).map(location => location.finca).filter(Boolean))].sort();
   return '<section class="form-section"><h2>Visita de malezas</h2><p class="field-hint">Campos de la tabla Visita Malezas. El ID se genera al guardar la captura.</p><div class="field-grid">' +
     fieldMarkup({ label: 'FECHA', name: 'FECHA', type: 'date', value: localDate(), required: true }, 'weeds-date', true) +
     fieldMarkup({ label: 'UBICACIÓN', name: 'UBICACIÓN', placeholder: 'Latitud, longitud', hint: 'La hoja de origen guarda las coordenadas en este campo.' }, 'weeds-location', true) +
     fieldMarkup({ label: 'RESPONSABLE', name: 'RESPONSABLE', value: state.user.displayName }, 'weeds-owner', true) +
-    fieldMarkup({ label: 'ZONA', name: 'ZONA', locationTarget: 'zona' }, 'weeds-zone', true) +
-    fieldMarkup({ label: 'FINCA', name: 'FINCA', locationTarget: 'finca' }, 'weeds-farm', true) +
-    '<div class="field full"><div class="field-hint" data-lot-location-status role="status">Ingresa un lote para completar finca y zona.</div></div></div></section><section class="form-section"><h2>Datos Malezas por lote</h2><p class="field-hint">Puedes agregar un detalle por cada lote visitado. Los registros quedan vinculados a esta visita en la captura local.</p>' +
-    repeatSection('malezas_detalle', 'Detalle de malezas', 'Agregar lote', 'Incluye lote, labor, porcentajes de control y cobertura, imagen, catorcena y observaciones.') + '</section>';
+    fieldMarkup({ label: 'ZONA', name: 'ZONA', placeholder: 'Se completa al seleccionar la finca', locationTarget: 'zona', farmZoneTarget: true }, 'weeds-zone', true) +
+    fieldMarkup({ label: 'FINCA', name: 'FINCA', type: 'select', locationTarget: 'finca', farmSelector: true, options: farmOptions }, 'weeds-farm', true) +
+    '<div class="field full"><div class="field-hint" data-farm-zone-status role="status">Selecciona una finca para completar la zona.</div></div><div class="field full"><div class="field-hint" data-lot-location-status role="status">Ingresa un lote para completar finca y zona.</div></div></div></section><section class="form-section"><h2>Datos Malezas por lote</h2><p class="field-hint">Puedes agregar un detalle por cada lote visitado. Los registros quedan vinculados a esta visita en la captura local.</p>' +
+    repeatSection('malezas_detalle', 'Detalle de malezas', 'Agregar lote', 'Incluye lote, labor, porcentajes de control y cobertura, imágenes, catorcena y observaciones.') + '</section>';
 }
 function eppFields() {
   return commonFields() + '<section class="form-section"><h2>Labor y asistencia</h2><div class="field-grid">' +
@@ -919,6 +921,10 @@ async function serializeForm(form, recordId) {
     reader.onerror = () => reject(reader.error || new Error('No se pudo leer la imagen.'));
     reader.readAsDataURL(file);
   });
+  const attachments = files => {
+    const selected = Array.from(files || []);
+    return selected.length ? Promise.all(selected.map(attachment)) : Promise.resolve(null);
+  };
   const data = {};
   for (const [key, value] of new FormData(form).entries()) {
     data[key] = typeof File !== 'undefined' && value instanceof File ? await attachment(value) : value;
@@ -939,7 +945,9 @@ async function serializeForm(form, recordId) {
   for (const list of $$('[data-repeat-list]', $('#form-fields'))) {
     const key = list.dataset.repeatList;
     subregistros[key] = await Promise.all($$('.child-row', list).map(async row => Object.fromEntries(await Promise.all($$('[data-child-field]', row).map(async input => [
-      input.dataset.childField, input.type === 'file' ? await attachment(input.files && input.files[0]) : input.value
+      input.dataset.childField, input.type === 'file'
+        ? await (input.multiple ? attachments(input.files) : attachment(input.files && input.files[0]))
+        : input.value
     ])))));
   }
   if (state.currentModule === 'malezas') {
@@ -1152,6 +1160,218 @@ function recordDetailsMarkup(record) {
     ? '<dl class="record-detail-grid">' + fields.map(([key, value]) => recordDetailFieldMarkup(key, value, 0)).join('') + '</dl>'
     : emptyState('Este registro no contiene campos para mostrar.');
 }
+function normalizeVisitMapLotCode(value) {
+  const code = String(value == null ? '' : value).trim();
+  return /^\d{1,7}$/.test(code) ? code.padStart(7, '0') : code;
+}
+function visitStatsByLot(records) {
+  const stats = new Map();
+  for (const record of records) {
+    if (record.tipo !== 'malezas') continue;
+    const data = record.datos || {};
+    const details = data.subregistros && Array.isArray(data.subregistros.malezas_detalle)
+      ? data.subregistros.malezas_detalle
+      : [];
+    const recordLots = new Map();
+    for (const detail of details) {
+      if (!detail || typeof detail !== 'object') continue;
+      const code = normalizeVisitMapLotCode(detail.LOTE == null ? detail.lote : detail.LOTE);
+      if (!code) continue;
+      const date = String(detail.FECHA || data.FECHA || data.fecha || record.createdAt || '');
+      const previousDate = recordLots.get(code);
+      if (!previousDate || date > previousDate) recordLots.set(code, date);
+    }
+    if (!recordLots.size) {
+      const code = normalizeVisitMapLotCode(data.LOTE == null ? data.lote : data.LOTE);
+      if (code) recordLots.set(code, String(data.FECHA || data.fecha || record.createdAt || ''));
+    }
+    for (const [code, date] of recordLots) {
+      const lotStats = stats.get(code) || { visits: 0, latestDate: '', owners: new Set() };
+      lotStats.visits += 1;
+      if (date && date > lotStats.latestDate) lotStats.latestDate = date;
+      const owner = String(record.ownerName || data.RESPONSABLE || data.responsable || '').trim();
+      if (owner) lotStats.owners.add(owner);
+      stats.set(code, lotStats);
+    }
+  }
+  return stats;
+}
+function visitMapRings(boundary) {
+  const geometry = boundary && boundary.geometry;
+  if (!geometry || geometry.crs !== 'EPSG:32615' || !Array.isArray(geometry.rings) || !geometry.rings.length) return null;
+  const rings = [];
+  for (const ring of geometry.rings) {
+    if (!Array.isArray(ring) || ring.length < 4) return null;
+    const points = [];
+    for (const point of ring) {
+      if (!Array.isArray(point) || point.length < 2) return null;
+      const x = Number(point[0]), y = Number(point[1]);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+      points.push([x, y]);
+    }
+    if (points[0][0] !== points[points.length - 1][0] || points[0][1] !== points[points.length - 1][1]) {
+      points.push(points[0]);
+    }
+    if (points.length < 4) return null;
+    rings.push(points);
+  }
+  return rings;
+}
+function renderVisitMap(boundaries, visits) {
+  const lots = [];
+  let skipped = 0;
+  for (const boundary of boundaries) {
+    const lotCode = normalizeVisitMapLotCode(boundary && boundary.lot_code);
+    const rings = visitMapRings(boundary);
+    if (!lotCode || !userCanAccessZone(boundary.zone) || !rings) {
+      skipped += 1;
+      continue;
+    }
+    lots.push({
+      lot_code: lotCode,
+      zone: String(boundary.zone || ''),
+      finca: String(boundary.finca || ''),
+      rings
+    });
+  }
+  const stage = $('#visit-map-stage');
+  const legend = $('#visit-map-legend');
+  const summary = $('#visit-map-summary');
+  const detail = $('#visit-map-detail');
+  if (!lots.length) {
+    state.visitMap = null;
+    legend.hidden = true;
+    summary.textContent = '';
+    detail.textContent = '';
+    stage.innerHTML = emptyState(boundaries.length
+      ? 'No se encontraron geometrías válidas para las zonas asignadas.'
+      : 'No hay geometrías disponibles. Aplica la migración del mapa e importa el ZIP del maestro de lotes.');
+    $('#visit-map-status').textContent = 'El mapa no contiene lotes para mostrar.';
+    return;
+  }
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const lot of lots) {
+    for (const ring of lot.rings) {
+      for (const point of ring) {
+        minX = Math.min(minX, point[0]);
+        minY = Math.min(minY, point[1]);
+        maxX = Math.max(maxX, point[0]);
+        maxY = Math.max(maxY, point[1]);
+      }
+    }
+  }
+  const width = 1000, height = 640, padding = 18;
+  const spanX = Math.max(maxX - minX, 1), spanY = Math.max(maxY - minY, 1);
+  const innerWidth = width - padding * 2, innerHeight = height - padding * 2;
+  const scale = Math.min(innerWidth / spanX, innerHeight / spanY);
+  const offsetX = padding + (innerWidth - spanX * scale) / 2;
+  const offsetY = padding + (innerHeight - spanY * scale) / 2;
+  const project = point => [
+    offsetX + (point[0] - minX) * scale,
+    height - offsetY - (point[1] - minY) * scale
+  ];
+  const lotMetadata = new Map();
+  const paths = lots.map(lot => {
+    const stats = visits.get(lot.lot_code);
+    const label = lot.lot_code + ' · ' + (lot.finca || 'Finca sin nombre') + ' · Zona ' + lot.zone +
+      (stats ? ' · ' + stats.visits + ' visitas' : ' · Sin visitas');
+    const path = lot.rings.map(ring => {
+      const first = project(ring[0]);
+      return 'M ' + first[0].toFixed(1) + ' ' + first[1].toFixed(1) + ' ' +
+        ring.slice(1).map(point => {
+          const projected = project(point);
+          return 'L ' + projected[0].toFixed(1) + ' ' + projected[1].toFixed(1);
+        }).join(' ') + ' Z';
+    }).join(' ');
+    lotMetadata.set(lot.lot_code, { lot_code: lot.lot_code, zone: lot.zone, finca: lot.finca });
+    return '<path class="visit-map-lot' + (stats ? ' is-visited' : '') + '" data-visit-lot="' + esc(lot.lot_code) +
+      '" d="' + path + '" fill-rule="evenodd" tabindex="0" role="button" aria-label="' + esc(label) +
+      '"><title>' + esc(label) + '</title></path>';
+  }).join('');
+  const visitedLots = lots.filter(lot => visits.has(lot.lot_code)).length;
+  const totalVisits = lots.reduce((total, lot) => total + (visits.get(lot.lot_code) ? visits.get(lot.lot_code).visits : 0), 0);
+  const unmatchedVisits = [...visits.keys()].filter(code => !lotMetadata.has(code)).length;
+  state.visitMap = { lots: lotMetadata, visits };
+  summary.textContent = visitedLots + ' de ' + lots.length + ' lotes con visita · ' +
+    totalVisits + (totalVisits === 1 ? ' visita registrada' : ' visitas registradas');
+  detail.textContent = 'Selecciona un lote para consultar sus visitas.';
+  stage.innerHTML = '<svg class="visit-map-svg" viewBox="0 0 ' + width + ' ' + height +
+    '" role="group" aria-label="Límites de lotes; los lotes verdes tienen visitas">' + paths + '</svg>';
+  legend.hidden = false;
+  const notices = [];
+  if (skipped) notices.push(skipped + ' geometrías inválidas o fuera de zona se omitieron.');
+  if (unmatchedVisits) notices.push(unmatchedVisits + ' lotes visitados no tienen geometría importada.');
+  $('#visit-map-status').textContent = notices.join(' ') || 'Selecciona un lote en el mapa para ver el detalle.';
+}
+async function loadVisitMapBoundaries() {
+  const boundaries = [];
+  for (let offset = 0, page; ; offset += 1000) {
+    page = await cloudRequest(
+      'field_lot_boundaries?select=lot_code,zone,finca,geometry&order=lot_code.asc&limit=1000&offset=' + offset
+    );
+    if (!Array.isArray(page)) throw new Error('Supabase devolvió una lista de geometrías no válida.');
+    boundaries.push(...page);
+    if (page.length < 1000) return boundaries;
+  }
+}
+function selectVisitMapLot(lotCode) {
+  const map = state.visitMap;
+  const lot = map && map.lots.get(lotCode);
+  if (!lot) return;
+  const stats = map.visits.get(lotCode);
+  const details = [lot.lot_code, lot.finca || 'Finca sin nombre', 'Zona ' + lot.zone];
+  if (stats) {
+    details.push(stats.visits + (stats.visits === 1 ? ' visita' : ' visitas'));
+    details.push('Última visita: ' + (stats.latestDate ? formatDate(stats.latestDate) : 'Sin fecha'));
+    if (stats.owners.size) details.push('Responsables: ' + [...stats.owners].sort((a, b) => a.localeCompare(b, 'es')).join(', '));
+  } else {
+    details.push('Sin visitas registradas');
+  }
+  $('#visit-map-detail').textContent = details.join(' · ');
+  $$('.visit-map-lot', $('#visit-map-stage')).forEach(path => {
+    path.classList.toggle('is-selected', path.dataset.visitLot === lotCode);
+  });
+}
+async function openVisitMap() {
+  if (!state.user || !['admin', 'supervisor'].includes(state.user.role)) {
+    toast('El mapa de visitas está disponible para supervisores y administradores.');
+    return;
+  }
+  const dialog = $('#visit-map-dialog');
+  if (typeof dialog.showModal !== 'function') {
+    toast('Este navegador no permite abrir el mapa de visitas.');
+    return;
+  }
+  if (!dialog.open) dialog.showModal();
+  const button = $('#open-visit-map');
+  button.disabled = true;
+  $('#visit-map-summary').textContent = '';
+  $('#visit-map-status').textContent = 'Cargando los lotes y las visitas autorizadas…';
+  $('#visit-map-detail').textContent = '';
+  $('#visit-map-stage').innerHTML = '';
+  $('#visit-map-legend').hidden = true;
+  try {
+    if (!state.configured) throw new Error('Configura el espacio compartido para cargar los límites protegidos.');
+    if (!navigator.onLine) throw new Error('Conéctate a internet para cargar los límites protegidos.');
+    const [boundaries, records] = await Promise.all([loadVisitMapBoundaries(), getRecords()]);
+    if (!state.user || !['admin', 'supervisor'].includes(state.user.role)) {
+      throw new Error('Tu perfil ya no tiene acceso al mapa de visitas.');
+    }
+    const visibleRecords = visibleLocalRecords(records).filter(record => record.tipo === 'malezas');
+    renderVisitMap(boundaries, visitStatsByLot(visibleRecords));
+  } catch (error) {
+    console.error('No se pudo cargar el mapa de visitas.', error);
+    state.visitMap = null;
+    $('#visit-map-summary').textContent = '';
+    $('#visit-map-detail').textContent = '';
+    $('#visit-map-legend').hidden = true;
+    $('#visit-map-stage').innerHTML = emptyState('No se pudo cargar el mapa de visitas.');
+    $('#visit-map-status').textContent = error.message || 'Ocurrió un error al cargar los lotes y visitas.';
+  } finally {
+    button.disabled = false;
+  }
+}
 function recordDetailTime(value) {
   const text = String(value || '').trim();
   const oldDateTime = text.match(/T(\d{2}:\d{2})/);
@@ -1350,6 +1570,7 @@ function renderHome() {
   $('#welcome-user').textContent = state.user.displayName.split(/\s+/)[0];
   $('#active-user').textContent = state.user.displayName;
   $('#active-role').textContent = roleName(state.user.role);
+  $('#open-visit-map').hidden = !['admin', 'supervisor'].includes(state.user.role);
   $('.admin-nav').hidden = !isActiveAdmin();
   $('.admin-mobile-nav').hidden = !isActiveAdmin();
   $('#invite-user-form').hidden = !isActiveAdmin();
@@ -1399,6 +1620,7 @@ function handleCloudError(error) {
 }
 async function startSession(user, session) {
   state.authSession = session;
+  state.visitMap = null;
   saveAuthSession(session);
   saveProfile(user);
   if (user.status !== 'active' || user.role === 'pending') {
@@ -1430,6 +1652,10 @@ async function endSession() {
   localStorage.removeItem(PROFILE_KEY);
   state.authSession = null;
   state.user = null;
+  state.visitMap = null;
+  const mapDialog = $('#visit-map-dialog');
+  if (mapDialog.open) mapDialog.close();
+  $('#visit-map-stage').innerHTML = '';
   state.acceptingInvite = false;
   localStorage.removeItem(INVITE_PENDING_KEY);
   state.syncConnected = false;
@@ -1782,6 +2008,18 @@ $('#check-access').addEventListener('click', async () => {
 });
 $('#pending-logout').addEventListener('click', endSession);
 $('#record-search').addEventListener('input', refreshLists);
+$('#open-visit-map').addEventListener('click', openVisitMap);
+$('#visit-map-stage').addEventListener('click', event => {
+  const lot = event.target.closest('[data-visit-lot]');
+  if (lot) selectVisitMapLot(lot.dataset.visitLot);
+});
+$('#visit-map-stage').addEventListener('keydown', event => {
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  const lot = event.target.closest('[data-visit-lot]');
+  if (!lot) return;
+  event.preventDefault();
+  selectVisitMapLot(lot.dataset.visitLot);
+});
 function visibleLocalRecords(records) {
   const scoped = records.filter(recordHasLotAccess);
   return ['admin', 'supervisor'].includes(state.user.role) ? scoped : scoped.filter(record => record.ownerUsername === state.user.username);

@@ -6,7 +6,7 @@ Aplicación web progresiva para capturar actividades de campo, trabajar temporal
 
 La aplicación conserva su interfaz estática y el almacenamiento local IndexedDB, y usa **Supabase Auth + PostgreSQL** como servicio central. Encaja con esta PWA sin backend propio: proporciona inicio de sesión por correo o usuario, una base consultable y políticas RLS aplicadas en el servidor. La interfaz nunca recibe una clave `service_role`; las reglas de la base limitan qué cuentas pueden leer, agregar o revisar datos.
 
-Las capturas nuevas se guardan primero en el dispositivo y se envían cuando vuelve la conexión. Cada perfil solo puede abrir sus formularios asignados, y PostgreSQL valida el mismo permiso al recibir capturas: Aplicaciones aéreas usa Clima, EPP y Vuelos; Terrestre usa Variación Aguilón y Calibraciones; Supervisor usa Malezas y Calidad; Administrador puede usar todos. Administradores y usuarios de Aplicaciones aéreas tienen acceso a todas las zonas; Terrestre y Supervisor necesitan zonas asignadas. Las zonas disponibles se derivan de las fincas y lotes registrados en `field_lots`, tanto en la administración como en la validación del servidor. Supervisores y administradores pueden revisar capturas del equipo dentro de su alcance; cada usuario también puede consultar sus propios registros dentro de las zonas permitidas. Las solicitudes públicas quedan pendientes; las cuentas creadas por administradores reciben inmediatamente el perfil y las zonas elegidas.
+Las capturas nuevas se guardan primero en el dispositivo y se envían cuando vuelve la conexión. Cada perfil solo puede abrir sus formularios asignados, y PostgreSQL valida el mismo permiso al recibir capturas: Aplicaciones aéreas usa Clima, EPP y Vuelos; Terrestre usa Variación Aguilón y Calibraciones; Supervisor usa Malezas y Calidad; Administrador puede usar todos. Administradores y usuarios de Aplicaciones aéreas tienen acceso a todas las zonas; Terrestre y Supervisor necesitan zonas asignadas. Las zonas disponibles se derivan de las fincas y lotes registrados en `field_lots`, tanto en la administración como en la validación del servidor. Supervisores y administradores pueden revisar capturas del equipo dentro de su alcance; cada usuario también puede consultar sus propios registros dentro de las zonas permitidas. Las solicitudes públicas quedan pendientes; las cuentas creadas por administradores reciben inmediatamente el perfil y las zonas elegidas. En Malezas, la finca se selecciona del catálogo autorizado y la zona se completa cuando la relación finca-zona es única; cada detalle por lote admite varias imágenes.
 
 En **Registros**, las capturas EPP incluyen **Generar PDF**. La opción abre la vista de impresión del navegador para imprimir o guardar el reporte como PDF; incluye los conteos de asistencia y cumplimiento por función, los datos de la captura y el estado de sincronización/revisión.
 
@@ -15,7 +15,7 @@ En **Registros**, las capturas EPP incluyen **Generar PDF**. La opción abre la 
 ## Configuración
 
 1. Crea un proyecto Supabase en la organización que administrará los datos.
-2. En **SQL Editor**, ejecuta en orden `supabase/migrations/20261106000000_multiuser_sync.sql`, `supabase/migrations/20261106010000_role_zone_access.sql`, `supabase/migrations/20261106020000_username_only_users.sql` y `supabase/migrations/20261106030000_dynamic_zones_from_field_lots.sql`. La segunda migración crea el catálogo protegido de lotes y fincas; las zonas se derivan de los valores únicos de `field_lots.zone`. La tercera habilita perfiles sin correo y la cuarta actualiza instalaciones existentes a este esquema.
+2. En **SQL Editor**, ejecuta en orden `supabase/migrations/20261106000000_multiuser_sync.sql`, `supabase/migrations/20261106010000_role_zone_access.sql`, `supabase/migrations/20261106020000_username_only_users.sql`, `supabase/migrations/20261106030000_dynamic_zones_from_field_lots.sql` y `supabase/migrations/20261106040000_field_lot_boundaries.sql`. La segunda migración crea el catálogo protegido de lotes y fincas; las zonas se derivan de los valores únicos de `field_lots.zone`. La tercera habilita perfiles sin correo, la cuarta actualiza instalaciones existentes y la quinta crea la tabla protegida de límites para el mapa.
 3. En **Authentication → URL Configuration**, configura la URL HTTPS donde publicarás MyM Campo y las URL de redirección permitidas. Configura SMTP/verificación de correo para la política de acceso de tu organización.
 4. Copia la **Project URL** y la **publishable/anon key** del proyecto en `config.js` (`supabaseUrl` y `supabaseAnonKey`). Esa clave es pública y se entrega al navegador; **nunca** pongas en `config.js` la clave `service_role`, una contraseña ni otra credencial privada. No publiques los datos hasta confirmar que la migración y RLS están aplicados.
 5. Publica los archivos estáticos detrás de HTTPS. Para desarrollo local, ejecuta `node server.mjs` desde la carpeta del proyecto y abre `http://localhost:8000`. Puedes usar `PORT` para cambiar el puerto. El servidor incluido solo sirve archivos estáticos y escucha en `127.0.0.1`; no es un servidor de sincronización.
@@ -43,17 +43,33 @@ En **Registros**, las capturas EPP incluyen **Generar PDF**. La opción abre la 
 
 Las políticas de seguridad se aplican en PostgreSQL aunque un cliente modifique la interfaz. Mantén activado RLS; no concedas privilegios `service_role` a usuarios ni los incrustes en el frontend. La función de revisión no permite que una persona revise sus propias capturas.
 
+## Mapa de visitas por lote
+
+El botón **Mapa de visitas** aparece para supervisores y administradores en **Registros**. Muestra los límites UTM 15N, resalta los lotes con visitas de Malezas y permite consultar el número de visitas, la fecha más reciente y los responsables. El mapa es vectorial, sin mapa base externo. Las geometrías no se publican en GitHub Pages: la aplicación las consulta desde `field_lot_boundaries`, cuyas políticas RLS aplican las zonas autorizadas.
+
+Después de aplicar la quinta migración, importa el ZIP del maestro desde un equipo administrativo. El importador lee solo los componentes del shapefile que necesita, valida que la proyección sea EPSG:32615 y por defecto hace una lectura de prueba sin enviar datos. Respeta la codificación declarada en `.cpg`; si ese archivo falta, intenta UTF-8 y luego Windows-1252, solo decodifica los campos necesarios y normaliza zonas numéricas para que coincidan con los permisos. Para importar, define `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY` solo en la terminal local y ejecuta:
+
+```powershell
+$env:SUPABASE_URL = 'https://<proyecto>.supabase.co'
+$env:SUPABASE_SERVICE_ROLE_KEY = '<clave service_role>'
+python scripts\import_lot_boundaries.py 'C:\ruta\al\MAESTRO DE LOTES.zip' --upload
+Remove-Item Env:\SUPABASE_SERVICE_ROLE_KEY
+```
+
+La clave `service_role` no debe guardarse en archivos, `config.js` ni en GitHub. El importador envía polígonos en lotes; sin `--upload`, solo valida el archivo y muestra cuántos lotes importaría.
+
 ## Conservación e importación de datos locales
 
 Las capturas y cuentas existentes en IndexedDB no se borran ni se suben automáticamente. Antes de actualizar un dispositivo con datos importantes, exporta **Registros → Exportar JSON** y conserva el archivo en un lugar protegido; puede incluir observaciones, coordenadas e imágenes. Las contraseñas locales se guardaban como hashes y no se pueden convertir en credenciales de Supabase: cada persona deberá solicitar una nueva cuenta con el mismo usuario para relacionar sus capturas.
 
 Una vez configurado el proyecto, inicia sesión con una cuenta cuyo usuario coincida con el de las capturas antiguas y usa **Pendientes → Importar registros locales de esta cuenta**. La importación solo envía registros cuyo `ownerUsername` coincide con el usuario autenticado; no cambia ni elimina el original local. Los identificadores existentes hacen que los reintentos sean idempotentes. Las nuevas capturas se sincronizan automáticamente; si falla la red o Supabase, permanecen en la cola local y el error se informa.
 
-Los archivos de imagen todavía viajan dentro del JSON del registro, como datos codificados. Para cargas grandes conviene definir y configurar un bucket privado de Supabase Storage y una política de retención antes de ampliar ese flujo.
+Las imágenes de Malezas admiten selección múltiple por lote y todavía viajan dentro del JSON del registro, como datos codificados. Para cargas grandes conviene definir y configurar un bucket privado de Supabase Storage y una política de retención antes de ampliar ese flujo.
 
 ## Validación local
 
 - `node --check app.js`
 - `node --check server.mjs`
 - `node --test tests/invitation.test.mjs`
-- Con un proyecto configurado y las cuatro migraciones aplicadas, completar las pruebas manuales de acceso por perfil y zona descritas arriba. Sin URL/clave válidas, catálogos y políticas aplicados, la autenticación, captura y lista de lotes remotas no están disponibles.
+- `python -m unittest discover -s tests -p test_*.py`
+- Con un proyecto configurado y las cinco migraciones aplicadas, completar las pruebas manuales de acceso por perfil y zona descritas arriba. Sin URL/clave válidas, catálogos y políticas aplicados, la autenticación, captura y lista de lotes remotas no están disponibles.

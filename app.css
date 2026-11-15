@@ -147,6 +147,7 @@ dialog::backdrop { background: #17241c88; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 22px; }
 .record-query-hint { color: var(--muted); font-size: 12px; margin: 12px 0 0; }
 .record-detail-dialog { width: min(760px, calc(100% - 24px)); max-height: min(85vh, 780px); overflow-y: auto; }
+.visit-map-dialog { width: min(1120px, calc(100% - 24px)); max-height: min(90vh, 900px); }
 .record-detail-card { padding: 22px; }
 .record-detail-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
 .record-detail-heading h2 { margin: 0; font-size: 19px; }
@@ -164,6 +165,16 @@ dialog::backdrop { background: #17241c88; }
 .record-detail-index { display: block; color: var(--muted); font-size: 10px; font-weight: 700; margin-bottom: 5px; }
 .record-detail-attachment strong, .record-detail-attachment small { display: block; overflow-wrap: anywhere; }
 .record-detail-attachment small { color: var(--muted); font-size: 10px; margin-top: 3px; }
+.visit-map-legend { display: flex; flex-wrap: wrap; gap: 14px; color: var(--muted); font-size: 11px; margin: 0 0 12px; }
+.visit-map-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.visit-map-swatch { display: inline-block; width: 12px; height: 12px; border: 1px solid #9aa99e; border-radius: 3px; background: #f4f6f3; }
+.visit-map-swatch.is-visited { background: #9bc99d; border-color: #447f51; }
+.visit-map-stage { min-height: 180px; overflow: auto; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
+.visit-map-svg { display: block; width: 100%; height: auto; }
+.visit-map-lot { fill: #f4f6f3; stroke: #9aa99e; stroke-width: 1; vector-effect: non-scaling-stroke; cursor: pointer; transition: fill .12s, stroke .12s; }
+.visit-map-lot.is-visited { fill: #9bc99d; fill-opacity: .9; stroke: #447f51; }
+.visit-map-lot.is-selected, .visit-map-lot:focus { fill: #f0d07a; stroke: #5a4720; stroke-width: 2; outline: none; }
+.visit-map-detail { min-height: 18px; margin: 13px 0 0; color: var(--ink); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 @media (max-width: 760px) {
   .topbar { height: 64px; padding: 0 17px; }
   .brand-mark { width: 34px; height: 34px; }

@@ -45,6 +45,26 @@ Las capturas de Malezas también incluyen **Generar PDF**. El reporte por captur
 
 Las políticas de seguridad se aplican en PostgreSQL aunque un cliente modifique la interfaz. Mantén activado RLS; no concedas privilegios `service_role` a usuarios ni los incrustes en el frontend. La función de revisión no permite que una persona revise sus propias capturas.
 
+## Vuelos
+
+El formulario muestra la dosis objetivo de la labor, los litros por hectárea aplicados y la variación porcentual `((litros aplicados / dosis objetivo) / hectáreas aplicadas - 1) × 100`. La tabla de dosis está incluida en `app.js`, por lo que funciona sin conexión; el objetivo y los resultados se guardan en la captura local. Si faltan los datos o el área es cero, la variación se muestra como `—`.
+
+| Labor | Litros/ha |
+| --- | ---: |
+| Madurante | 14 |
+| Premadurante | 20 |
+| Descecante | 20 |
+| Bioestimulante | 14 |
+| Agro K | 10 |
+| Kelatex | 10 |
+| Ensayo_20 | 20 |
+| Ensayo_14 | 14 |
+| Madurante_20 | 20 |
+| Madurante_25 | 25 |
+| Madurante_30 | 30 |
+
+`Control de malezas` se conserva como opción por compatibilidad, pero no tiene dosis configurada, por lo que su variación aparece como `—`.
+
 ## Mapa de lotes muestreados
 
 El botón **Mapa de muestreos** aparece para supervisores y administradores en **Registros**. Muestra los límites UTM 15N; los lotes sin muestreo aparecen en gris y los visitados se colorean por el % CONTROL del muestreo más reciente (menos de 25%, 25 a menos de 50%, 50 a menos de 75% y 75-100%). Al seleccionar un lote se consultan su último porcentaje, fecha, número de visitas y responsables; los muestreos sin porcentaje se identifican aparte. El mapa es vectorial, sin mapa base externo. Las geometrías no se publican en GitHub Pages: la aplicación las consulta desde `field_lot_boundaries`, cuyas políticas RLS aplican las zonas autorizadas.

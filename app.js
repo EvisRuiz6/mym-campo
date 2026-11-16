@@ -1047,7 +1047,11 @@ async function serializeForm(form, recordId, previousData) {
       data[key] = value;
     }
   }
-  if (state.currentModule === 'clima') data.lecturas = $$('.repeat-row', $('#weather-rows')).map(row => Object.fromEntries(new FormData(row).entries()));
+  if (state.currentModule === 'clima') {
+    data.lecturas = $$('.repeat-row', $('#weather-rows')).map(row =>
+      Object.fromEntries($$('[name]', row).map(input => [input.name, input.value]))
+    );
+  }
   if (state.currentModule === 'epp') {
     const attendance = $$('.attendance-count', $('#form-fields'));
     data.asistencia_por_funcion = Object.fromEntries(attendance.map(input => [input.dataset.function, Number(input.value) || 0]));
@@ -2517,7 +2521,7 @@ $('#capture-form').addEventListener('submit', async event => {
   const recordId = editing ? editing.id : crypto.randomUUID();
   let datos;
   try { datos = await serializeForm(form, recordId, editing && editing.datos); }
-  catch (error) { console.error(error); toast('No se pudo leer una imagen adjunta.'); return; }
+  catch (error) { console.error(error); toast('No se pudo preparar la captura. Revisa los datos e inténtalo de nuevo.'); return; }
   if (!editing) datos.hora_registro = localTime();
   const record = editing
     ? {

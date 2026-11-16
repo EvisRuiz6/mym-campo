@@ -213,7 +213,7 @@ const childSchemas = {
 };
 const $ = (selector, root) => (root || document).querySelector(selector);
 const $$ = (selector, root) => [...(root || document).querySelectorAll(selector)];
-const state = { db: null, user: null, authSession: null, configured: false, syncConnected: false, syncBusy: false, refreshPromise: null, currentModule: null, editingRecord: null, recordTimeTimer: null, lotLookup: Object.create(null), lotLookupRequests: new Map(), zoneOptions: [], visitMap: null, acceptingInvite: false };
+const state = { db: null, user: null, authSession: null, configured: false, syncConnected: false, syncBusy: false, refreshPromise: null, currentModule: null, editingRecord: null, recordTimeTimer: null, lotLookup: Object.create(null), lotLookupRequests: new Map(), zoneOptions: [], visitMap: null, acceptingInvite: false, lotFollowupPlans: [], lotFollowupVisits: [], lotFollowupLoadPromise: null, lotFollowupDateId: 0, editingLotFollowup: null };
 
 function lotLookupCacheKey() {
   const scopeKey = [state.user.role, ...(state.user.allowedZones || []).slice().sort()].join(':');
@@ -499,6 +499,9 @@ function authMessage(id, message) {
 }
 function isActiveAdmin() {
   return !!state.user && state.user.status === 'active' && state.user.role === 'admin';
+}
+function canAccessLotFollowup() {
+  return !!state.user && state.user.status === 'active' && ['admin', 'supervisor'].includes(state.user.role);
 }
 function consumeInviteLink() {
   const fragment = new URLSearchParams(location.hash.slice(1));
@@ -1394,7 +1397,7 @@ function eppReportDocument(record) {
     }
   `;
   return '<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>' + esc(filename) + '</title><style>' + styles + '</style></head><body><main class="epp-report">' +
-    '<header class="epp-report-header"><div><h1 class="epp-report-title">APLICACIONES AÉREAS</h1><p class="epp-report-period">Temporada 2025-2026</p></div><div class="epp-report-brand">MADRE<br>TIERRA</div></header>' +
+    '<header class="epp-report-header"><div><h1 class="epp-report-title">APLICACIONES AÉREAS</h1><p class="epp-report-period">TEMPORADA 2026-2027</p></div><div class="epp-report-brand">MADRE<br>TIERRA</div></header>' +
     '<section class="epp-report-meta-grid">' + metadata + '</section>' +
     '<div class="epp-report-compliance"><strong>Porcentaje de cumplimiento general</strong><span>' + esc(complianceSummary) + '</span></div>' +
     '<h2 class="epp-report-section-title">Uso de equipo de protección personal aplicaciones con dron</h2>' +
@@ -1449,6 +1452,7 @@ function malezasReportDocument(record, boundaries) {
     ':</strong><span>' + esc(value) + '</span></div>').join('');
   const detailMarkup = rows.map((row, index) => {
     const control = row.controlPercent == null ? 'Sin dato' : formatVisitMapControlPercent(row.controlPercent);
+    const controlClass = malezasReportControlClass(row.controlPercent);
     const coverage = row.coveragePercent == null ? 'Sin dato' : formatVisitMapControlPercent(row.coveragePercent);
     const images = row.images.length
       ? '<div class="malezas-report-photos">' + row.images.map(image =>
@@ -1462,7 +1466,8 @@ function malezasReportDocument(record, boundaries) {
       ' · ' + esc(row.date ? formatDate(row.date.slice(0, 10)) : 'Sin fecha') +
       (row.catorcena ? ' · Catorcena ' + esc(row.catorcena) : '') +
       '</p></div><span>Detalle ' + (index + 1) + '</span></header>' +
-      '<div class="malezas-report-metrics"><div><small>% Control</small><strong>' +
+      '<div class="malezas-report-metrics"><div><small>% Control</small><strong class="malezas-report-control-value ' +
+      controlClass + '">' +
       esc(control) + '</strong></div><div><small>% Cobertura (100 - control)</small><strong>' +
       esc(coverage) + '</strong></div></div>' +
       (row.observations ? '<p class="malezas-report-observations"><strong>Observaciones:</strong> ' +
@@ -1504,6 +1509,11 @@ function malezasReportDocument(record, boundaries) {
     .malezas-report-swatch.control-medium-low { background: #e8b37d; border-color: #9b672e; }
     .malezas-report-swatch.control-medium-high { background: #e4d27f; border-color: #82702b; }
     .malezas-report-swatch.control-high { background: #93bf96; border-color: #3e7048; }
+    .malezas-report-metrics strong.control-missing { color: #657b85; }
+    .malezas-report-metrics strong.control-low { color: #9f493f; }
+    .malezas-report-metrics strong.control-medium-low { color: #9b672e; }
+    .malezas-report-metrics strong.control-medium-high { color: #82702b; }
+    .malezas-report-metrics strong.control-high { color: #3e7048; }
     .malezas-report-lot { margin: 9px 0 0; border: 1px solid #dce5de; padding: 8px; }
     .malezas-report-lot > header { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; margin: 0 0 6px; }
     .malezas-report-lot > header { break-after: avoid-page; }
@@ -1535,10 +1545,10 @@ function malezasReportDocument(record, boundaries) {
     '<h2 class="malezas-report-section-title">Mapa de lotes muestreados</h2>' +
     '<figure class="malezas-report-map">' + map.markup + '</figure>' + missingMapNote +
     '<ul class="malezas-report-legend"><li><i class="malezas-report-swatch control-missing"></i> Sin %</li>' +
-    '<li><i class="malezas-report-swatch control-low"></i> Menos de 25%</li>' +
-    '<li><i class="malezas-report-swatch control-medium-low"></i> 25 a menos de 50%</li>' +
-    '<li><i class="malezas-report-swatch control-medium-high"></i> 50 a menos de 75%</li>' +
-    '<li><i class="malezas-report-swatch control-high"></i> 75-100%</li></ul>' +
+    '<li><i class="malezas-report-swatch control-low"></i> Menos de 70%</li>' +
+    '<li><i class="malezas-report-swatch control-medium-low"></i> 70% a menos de 75%</li>' +
+    '<li><i class="malezas-report-swatch control-medium-high"></i> 75% a 85%</li>' +
+    '<li><i class="malezas-report-swatch control-high"></i> Más de 85%</li></ul>' +
     '<h2 class="malezas-report-section-title">Control, cobertura e imágenes por lote</h2>' +
     (detailMarkup || '<p class="malezas-report-map-empty">La captura no contiene detalles de lotes.</p>') +
     '</main></body></html>';
@@ -1642,6 +1652,300 @@ function normalizeVisitMapLotCode(value) {
   const code = String(value == null ? '' : value).trim();
   return /^\d{1,7}$/.test(code) ? code.padStart(7, '0') : code;
 }
+function decodeXlsxXmlText(value) {
+  return String(value || '')
+    .replace(/&(#x[\da-f]+|#\d+|lt|gt|quot|apos|amp);/g, entity => {
+      const code = entity.slice(1, -1);
+      if (code === 'lt') return '<';
+      if (code === 'gt') return '>';
+      if (code === 'quot') return '"';
+      if (code === 'apos') return "'";
+      if (code === 'amp') return '&';
+      return String.fromCodePoint(code[1].toLowerCase() === 'x' ? parseInt(code.slice(2), 16) : Number(code.slice(1)));
+    });
+}
+function xlsxXmlAttribute(tag, name) {
+  const attributes = String(tag || '').match(/[^\s=]+\s*=\s*("[^"]*"|'[^']*')/g) || [];
+  for (const attribute of attributes) {
+    const equals = attribute.indexOf('=');
+    if (attribute.slice(0, equals).trim() !== name) continue;
+    return decodeXlsxXmlText(attribute.slice(equals + 1).trim().replace(/^["']|["']$/g, ''));
+  }
+  return '';
+}
+function xlsxXmlTextElements(xml, elementName) {
+  const matcher = new RegExp('<' + elementName + '\\b[^>]*>([\\s\\S]*?)<\\/' + elementName + '>', 'gi');
+  return [...String(xml || '').matchAll(matcher)].map(match => decodeXlsxXmlText(match[1])).join('');
+}
+function xlsxZipEntries(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const view = new DataView(buffer);
+  const decoder = new TextDecoder();
+  const minimumOffset = Math.max(0, bytes.length - 65557);
+  let endOffset = -1;
+  for (let offset = bytes.length - 22; offset >= minimumOffset; offset--) {
+    if (view.getUint32(offset, true) === 0x06054b50) { endOffset = offset; break; }
+  }
+  if (endOffset < 0) throw new Error('El archivo no es un libro Excel .xlsx válido.');
+  const entryCount = view.getUint16(endOffset + 10, true);
+  const centralSize = view.getUint32(endOffset + 12, true);
+  const centralOffset = view.getUint32(endOffset + 16, true);
+  if (entryCount === 0xffff || centralSize === 0xffffffff || centralOffset === 0xffffffff) {
+    throw new Error('Este libro Excel usa un formato ZIP64 que no es compatible.');
+  }
+  if (centralOffset + centralSize > bytes.length) throw new Error('El índice ZIP del libro Excel está incompleto.');
+  const centralEnd = centralOffset + centralSize;
+  const entries = new Map();
+  let offset = centralOffset;
+  for (let index = 0; index < entryCount; index++) {
+    if (offset + 46 > centralEnd || view.getUint32(offset, true) !== 0x02014b50) throw new Error('No se pudo leer el índice del libro Excel.');
+    const method = view.getUint16(offset + 10, true);
+    const compressedSize = view.getUint32(offset + 20, true);
+    const uncompressedSize = view.getUint32(offset + 24, true);
+    const nameLength = view.getUint16(offset + 28, true);
+    const extraLength = view.getUint16(offset + 30, true);
+    const commentLength = view.getUint16(offset + 32, true);
+    const localOffset = view.getUint32(offset + 42, true);
+    if (offset + 46 + nameLength + extraLength + commentLength > centralEnd) throw new Error('El índice ZIP del libro Excel está incompleto.');
+    if (compressedSize === 0xffffffff || uncompressedSize === 0xffffffff || localOffset === 0xffffffff) {
+      throw new Error('Este libro Excel usa un formato ZIP64 que no es compatible.');
+    }
+    const nameStart = offset + 46;
+    const name = decoder.decode(bytes.subarray(nameStart, nameStart + nameLength));
+    if (localOffset + 30 > bytes.length || view.getUint32(localOffset, true) !== 0x04034b50) {
+      throw new Error('No se pudo abrir un componente del libro Excel.');
+    }
+    const localNameLength = view.getUint16(localOffset + 26, true);
+    const localExtraLength = view.getUint16(localOffset + 28, true);
+    const dataOffset = localOffset + 30 + localNameLength + localExtraLength;
+    if (dataOffset + compressedSize > bytes.length) throw new Error('Un componente del libro Excel está incompleto.');
+    entries.set(name, { method, compressedSize, uncompressedSize, dataOffset });
+    offset = nameStart + nameLength + extraLength + commentLength;
+  }
+  return { bytes, entries };
+}
+async function readXlsxZipEntry(zip, path) {
+  const entry = zip.entries.get(path);
+  if (!entry) return null;
+  if (entry.uncompressedSize > 30 * 1024 * 1024) throw new Error('Una hoja del libro Excel supera el tamaño permitido.');
+  const compressed = zip.bytes.subarray(entry.dataOffset, entry.dataOffset + entry.compressedSize);
+  if (entry.method === 0) return new TextDecoder().decode(compressed);
+  if (entry.method !== 8 || typeof DecompressionStream === 'undefined') {
+    throw new Error('Este navegador no puede descomprimir el formato de este libro Excel.');
+  }
+  const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  return new Response(stream).text();
+}
+function normalizeXlsxPath(target) {
+  const absolute = String(target || '').startsWith('/');
+  const parts = absolute ? [] : ['xl'];
+  for (const segment of String(target || '').replace(/^\/+/, '').split('/')) {
+    if (!segment || segment === '.') continue;
+    if (segment === '..') parts.pop();
+    else parts.push(segment);
+  }
+  return parts.join('/');
+}
+function xlsxColumnIndex(reference) {
+  const letters = /^([A-Z]+)\d+$/i.exec(String(reference || ''));
+  if (!letters) return -1;
+  let index = 0;
+  for (const character of letters[1].toUpperCase()) index = index * 26 + character.charCodeAt(0) - 64;
+  return index - 1;
+}
+function parseXlsxWorksheet(xml, sharedStrings) {
+  const rows = [];
+  for (const rowMatch of String(xml || '').matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/gi)) {
+    const row = [];
+    for (const cellMatch of rowMatch[1].matchAll(/<c\b[^>]*(?:\/>|>[\s\S]*?<\/c>)/gi)) {
+      const cell = cellMatch[0];
+      const openEnd = cell.indexOf('>') + 1;
+      const openTag = cell.slice(0, openEnd);
+      const reference = xlsxXmlAttribute(openTag, 'r');
+      const column = xlsxColumnIndex(reference);
+      if (column < 0) continue;
+      const type = xlsxXmlAttribute(openTag, 't');
+      const body = cell.endsWith('/>') ? '' : cell.slice(openEnd, cell.lastIndexOf('</c>'));
+      let value = '';
+      if (type === 'inlineStr') {
+        value = xlsxXmlTextElements(body, 't');
+      } else {
+        const valueMatch = /<v\b[^>]*>([\s\S]*?)<\/v>/i.exec(body);
+        value = valueMatch ? decodeXlsxXmlText(valueMatch[1]) : '';
+        if (type === 's' && value !== '') {
+          const sharedIndex = Number(value);
+          value = Number.isInteger(sharedIndex) ? sharedStrings[sharedIndex] || '' : '';
+        } else if (type === 'b') {
+          value = value === '1' ? 'TRUE' : 'FALSE';
+        }
+      }
+      row[column] = value;
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+async function parseXlsxWorkbook(file) {
+  if (!file || !Number.isFinite(file.size) || file.size === 0) throw new Error('Selecciona un archivo Excel .xlsx.');
+  if (file.size > 20 * 1024 * 1024) throw new Error('El archivo Excel supera el límite de 20 MB.');
+  const zip = xlsxZipEntries(await file.arrayBuffer());
+  const workbookXml = await readXlsxZipEntry(zip, 'xl/workbook.xml');
+  const relationshipsXml = await readXlsxZipEntry(zip, 'xl/_rels/workbook.xml.rels');
+  if (!workbookXml || !relationshipsXml) throw new Error('El archivo no contiene la estructura esperada de Excel.');
+  const sheetTag = (workbookXml.match(/<sheet\b[^>]*>/i) || [])[0];
+  if (!sheetTag) throw new Error('El libro Excel no tiene hojas para importar.');
+  const relationshipId = xlsxXmlAttribute(sheetTag, 'r:id');
+  const relationshipTag = (relationshipsXml.match(/<Relationship\b[^>]*>/gi) || [])
+    .find(tag => xlsxXmlAttribute(tag, 'Id') === relationshipId);
+  const sheetTarget = relationshipTag && xlsxXmlAttribute(relationshipTag, 'Target');
+  if (!sheetTarget) throw new Error('No se pudo encontrar la primera hoja del libro Excel.');
+  const worksheetXml = await readXlsxZipEntry(zip, normalizeXlsxPath(sheetTarget));
+  if (!worksheetXml) throw new Error('No se pudo leer la primera hoja del libro Excel.');
+  const sharedXml = await readXlsxZipEntry(zip, 'xl/sharedStrings.xml');
+  const sharedStrings = sharedXml
+    ? [...sharedXml.matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/gi)].map(match => xlsxXmlTextElements(match[1], 't'))
+    : [];
+  return parseXlsxWorksheet(worksheetXml, sharedStrings);
+}
+function excelDateToIso(value) {
+  const text = String(value == null ? '' : value).trim();
+  if (!text) return '';
+  if (/^\d+(?:\.\d+)?$/.test(text)) {
+    const serial = Number(text);
+    if (!Number.isFinite(serial) || serial < 1 || serial > 2958465) return null;
+    const date = new Date(Date.UTC(1899, 11, 30) + Math.floor(serial) * 86400000);
+    return Number.isNaN(date.getTime()) ? null : date.toISOString().slice(0, 10);
+  }
+  const iso = /^(\d{4})-(\d{2})-(\d{2})(?:T.*)?$/.exec(text);
+  if (iso) {
+    const date = new Date(Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3])));
+    return date.toISOString().slice(0, 10) === iso[1] + '-' + iso[2] + '-' + iso[3] ? iso[1] + '-' + iso[2] + '-' + iso[3] : null;
+  }
+  const localized = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(text);
+  if (localized) {
+    const day = Number(localized[1]), month = Number(localized[2]), year = Number(localized[3]);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+      ? year + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0')
+      : null;
+  }
+  return null;
+}
+function normalizeLotFollowupHeader(value) {
+  return String(value == null ? '' : value).trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase().replace(/\s*\/\s*/g, '/').replace(/\s+/g, ' ');
+}
+function parseLotFollowupRows(rows) {
+  if (!Array.isArray(rows) || !rows.length) return { plans: [], errors: ['La primera hoja está vacía.'] };
+  const requiredHeaders = ['FECHA SIEMBRA/CORTE', 'FINCA', 'LOTE', 'ESTADO', 'RESPONSABLE'];
+  const headerIndex = rows.findIndex(row => {
+    const headers = (row || []).map(normalizeLotFollowupHeader);
+    return requiredHeaders.every(header => headers.includes(header));
+  });
+  if (headerIndex < 0) return { plans: [], errors: ['No se encontraron los encabezados requeridos: FECHA SIEMBRA/CORTE, FINCA, LOTE, ESTADO y RESPONSABLE.'] };
+  const headers = (rows[headerIndex] || []).map(normalizeLotFollowupHeader);
+  const column = name => headers.indexOf(name);
+  const visitColumns = headers.map((header, index) => {
+    const match = /^VISITA\s*(\d+)$/.exec(header);
+    return match ? { number: Number(match[1]), index } : null;
+  }).filter(Boolean).sort((a, b) => a.number - b.number);
+  if (!visitColumns.length) return { plans: [], errors: ['Agrega por lo menos una columna VISITA 1, VISITA 2, etc.'] };
+  if (visitColumns[0].number !== 1 || visitColumns.some((visit, index) => index > 0 && visit.number !== visitColumns[index - 1].number + 1)) {
+    return { plans: [], errors: ['Las columnas de visitas deben estar numeradas en orden desde VISITA 1.'] };
+  }
+  const errors = [];
+  const plans = [];
+  const seenLots = new Set();
+  for (let rowIndex = headerIndex + 1; rowIndex < rows.length; rowIndex++) {
+    const row = rows[rowIndex] || [];
+    if (!row.some(value => String(value == null ? '' : value).trim())) continue;
+    const rowNumber = rowIndex + 1;
+    const lotCode = normalizeVisitMapLotCode(row[column('LOTE')]);
+    const cycleDate = excelDateToIso(row[column('FECHA SIEMBRA/CORTE')]);
+    if (!lotCode) errors.push('Fila ' + rowNumber + ': falta LOTE.');
+    if (!cycleDate) errors.push('Fila ' + rowNumber + ': FECHA SIEMBRA/CORTE está vacía o no es válida.');
+    if (lotCode && seenLots.has(lotCode)) errors.push('Fila ' + rowNumber + ': el lote ' + lotCode + ' aparece más de una vez en el archivo.');
+    if (lotCode) seenLots.add(lotCode);
+    const visitDates = [];
+    let emptyVisitSeen = false;
+    for (const visitColumn of visitColumns) {
+      const value = excelDateToIso(row[visitColumn.index]);
+      if (value === null) errors.push('Fila ' + rowNumber + ': VISITA ' + visitColumn.number + ' no contiene una fecha válida.');
+      else if (!value) emptyVisitSeen = true;
+      else {
+        if (emptyVisitSeen) errors.push('Fila ' + rowNumber + ': completa las visitas en orden; falta una fecha anterior a VISITA ' + visitColumn.number + '.');
+        visitDates.push({ number: visitColumn.number, date: value });
+      }
+    }
+    for (let index = 0; index < visitDates.length; index++) {
+      if (cycleDate && visitDates[index].date < cycleDate) {
+        errors.push('Fila ' + rowNumber + ': VISITA ' + visitDates[index].number + ' es anterior a la fecha de siembra/corte.');
+      }
+      if (index && visitDates[index].date < visitDates[index - 1].date) {
+        errors.push('Fila ' + rowNumber + ': las fechas VISITA deben estar en orden cronológico.');
+        break;
+      }
+      if (index && visitDates[index].date === visitDates[index - 1].date) {
+        errors.push('Fila ' + rowNumber + ': dos visitas no pueden tener la misma fecha.');
+        break;
+      }
+    }
+    if (!lotCode || !cycleDate) continue;
+    plans.push({
+      lot_code: lotCode,
+      cycle_date: cycleDate,
+      finca: String(row[column('FINCA')] == null ? '' : row[column('FINCA')]).trim(),
+      crop_state: String(row[column('ESTADO')] == null ? '' : row[column('ESTADO')]).trim(),
+      responsible: String(row[column('RESPONSABLE')] == null ? '' : row[column('RESPONSABLE')]).trim(),
+      visit_dates: visitDates.map(visit => visit.date)
+    });
+  }
+  if (!plans.length && !errors.length) errors.push('No se encontraron filas de lotes para importar.');
+  return { plans, errors };
+}
+function evaluateLotFollowup(plan, visits, today) {
+  const lotCode = normalizeVisitMapLotCode(plan && plan.lot_code);
+  const cycleDate = String(plan && plan.cycle_date || '').slice(0, 10);
+  const scheduledDates = (Array.isArray(plan && plan.visit_dates) ? plan.visit_dates : [])
+    .map(value => String(value || '').slice(0, 10)).filter(value => excelDateToIso(value) === value).sort();
+  const uniqueVisits = new Map();
+  (Array.isArray(visits) ? visits : []).forEach((visit, index) => {
+    if (normalizeVisitMapLotCode(visit && visit.lot_code) !== lotCode) return;
+    const date = String(visit && visit.visit_date || '').slice(0, 10);
+    if (excelDateToIso(date) !== date || (cycleDate && date < cycleDate)) return;
+    const recordId = String(visit && (visit.record_id || visit.id) || '');
+    const key = recordId || lotCode + ':' + date + ':' + index;
+    if (!uniqueVisits.has(key)) uniqueVisits.set(key, { record_id: recordId, visit_date: date });
+  });
+  const actualVisits = [...uniqueVisits.values()].sort((a, b) => a.visit_date.localeCompare(b.visit_date));
+  const requiredCount = scheduledDates.length;
+  const slots = scheduledDates.map((dueDate, index) => {
+    const actual = actualVisits[index] || null;
+    return {
+      number: index + 1,
+      due_date: dueDate,
+      visit_date: actual && actual.visit_date,
+      status: actual ? (actual.visit_date > dueDate ? 'Realizada tarde' : 'Realizada') : (dueDate < today ? 'Atrasada' : 'Pendiente')
+    };
+  });
+  const pendingCount = Math.max(0, requiredCount - actualVisits.length);
+  const overdueCount = slots.filter(slot => slot.status === 'Atrasada').length;
+  const fulfilled = requiredCount > 0 && actualVisits.length >= requiredCount;
+  const statusKey = !requiredCount ? 'unscheduled' : fulfilled ? 'complete' : overdueCount ? 'overdue' : 'pending';
+  return {
+    actualCount: actualVisits.length,
+    requiredCount,
+    pendingCount,
+    overdueCount,
+    fulfilled,
+    statusKey,
+    statusLabel: statusKey === 'complete' ? 'Cumplido' : statusKey === 'overdue' ? 'Atrasado' : statusKey === 'pending' ? 'Pendiente' : 'Sin visitas programadas',
+    nextDueDate: slots.find(slot => !slot.visit_date)?.due_date || '',
+    lastVisitDate: actualVisits.length ? actualVisits[actualVisits.length - 1].visit_date : '',
+    actualVisits,
+    slots
+  };
+}
 function visitMapControlPercent(value) {
   if (typeof value !== 'number' && typeof value !== 'string') return null;
   const normalized = typeof value === 'string' ? value.trim().replace(/%$/, '').trim().replace(',', '.') : value;
@@ -1693,6 +1997,13 @@ function visitMapControlClass(stats) {
   if (percent < 50) return ' is-visited control-medium-low';
   if (percent < 75) return ' is-visited control-medium-high';
   return ' is-visited control-high';
+}
+function malezasReportControlClass(percent) {
+  if (!Number.isFinite(percent)) return 'control-missing';
+  if (percent > 85) return 'control-high';
+  if (percent >= 75) return 'control-medium-high';
+  if (percent >= 70) return 'control-medium-low';
+  return 'control-low';
 }
 function visitStatsByLot(records) {
   const stats = new Map();
@@ -1822,7 +2133,7 @@ function malezasReportMapSvg(boundaries, rows) {
           return 'L ' + projected[0].toFixed(1) + ' ' + projected[1].toFixed(1);
         }).join(' ') + ' Z';
     }).join(' ');
-    const className = visitMapControlClass({ latestControlPercent: lot.sample.controlPercent });
+    const className = ' is-visited ' + malezasReportControlClass(lot.sample.controlPercent);
     const control = lot.sample.controlPercent == null
       ? 'Sin dato de control'
       : 'Control ' + formatVisitMapControlPercent(lot.sample.controlPercent);
@@ -2268,6 +2579,324 @@ function canManageRecordForUser(record, user, hasLotAccess) {
 function canManageRecord(record) {
   return canManageRecordForUser(record, state.user, recordHasLotAccess(record));
 }
+function setLotFollowupStatus(message, kind) {
+  const status = $('#lot-followup-status');
+  const text = $('#lot-followup-status-text');
+  status.hidden = !message;
+  status.classList.toggle('warning-strip', kind === 'warning');
+  $('.status-check', status).textContent = kind === 'success' ? '✓' : kind === 'info' ? 'i' : '!';
+  text.textContent = message || '';
+}
+function clearLotFollowupData() {
+  state.lotFollowupPlans = [];
+  state.lotFollowupVisits = [];
+  state.lotFollowupLoadPromise = null;
+  state.editingLotFollowup = null;
+  $('#lot-followup-summary').innerHTML = '';
+  $('#lot-followup-rows').innerHTML = '<tr><td colspan="8" class="lot-followup-empty">Carga los planes para consultar el seguimiento.</td></tr>';
+  $('#lot-followup-lot-options').innerHTML = '';
+  setLotFollowupStatus('', '');
+}
+function addLotFollowupDateInput(value) {
+  const container = $('#lot-followup-date-inputs');
+  const row = document.createElement('div');
+  const index = container.querySelectorAll('[data-lot-followup-date]').length + 1;
+  const inputId = 'lot-followup-date-' + (++state.lotFollowupDateId);
+  row.className = 'lot-followup-date-row';
+  row.innerHTML = '<div class="field"><label class="field-label" for="' + inputId + '">VISITA ' + index + '</label><input id="' + inputId + '" class="small-input" type="date" data-lot-followup-date value="' + esc(value || '') + '"></div><button class="remove-row" type="button" data-remove-lot-followup-date>Quitar</button>';
+  container.appendChild(row);
+}
+function resetLotFollowupForm() {
+  $('#lot-followup-form').reset();
+  state.editingLotFollowup = null;
+  $('#lot-followup-code').readOnly = false;
+  $('#lot-followup-form-title').textContent = 'Registrar lote';
+  $('#lot-followup-save').textContent = 'Guardar plan';
+  $('#lot-followup-cancel-edit').hidden = true;
+  $('#lot-followup-cycle-date').value = localDate();
+  $('#lot-followup-responsible').value = state.user ? state.user.displayName : '';
+  $('#lot-followup-date-inputs').innerHTML = '';
+  for (let index = 0; index < 3; index++) addLotFollowupDateInput('');
+  updateLotFollowupFarm();
+}
+function updateLotFollowupFarm() {
+  const lotCode = normalizeVisitMapLotCode($('#lot-followup-code').value);
+  const lot = state.lotLookup[lotCode];
+  $('#lot-followup-farm').value = lot ? lot.finca || '' : '';
+}
+function renderLotFollowupLotOptions() {
+  const options = Object.keys(state.lotLookup).sort().map(lotCode => {
+    const lot = state.lotLookup[lotCode] || {};
+    return '<option value="' + esc(lotCode) + '">' + esc(lot.finca || '') + '</option>';
+  });
+  $('#lot-followup-lot-options').innerHTML = options.join('');
+}
+function normalizeLotFarmLabel(value) {
+  return String(value || '').trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').toLowerCase();
+}
+function renderLotFollowup() {
+  if (!canAccessLotFollowup()) return;
+  const today = localDate();
+  const visitsByLot = new Map();
+  for (const visit of state.lotFollowupVisits) {
+    const lotCode = normalizeVisitMapLotCode(visit.lot_code);
+    if (!lotCode) continue;
+    if (!visitsByLot.has(lotCode)) visitsByLot.set(lotCode, []);
+    visitsByLot.get(lotCode).push(visit);
+  }
+  const plans = state.lotFollowupPlans.map(plan => {
+    const lotCode = normalizeVisitMapLotCode(plan.lot_code);
+    const lot = state.lotLookup[lotCode] || {};
+    return {
+      plan,
+      lotCode,
+      farm: lot.finca || plan.finca || '',
+      summary: evaluateLotFollowup(plan, visitsByLot.get(lotCode) || [], today)
+    };
+  }).sort((a, b) => a.farm.localeCompare(b.farm) || a.lotCode.localeCompare(b.lotCode));
+  const pendingVisits = plans.reduce((total, item) => total + item.summary.pendingCount, 0);
+  const overdueVisits = plans.reduce((total, item) => total + item.summary.overdueCount, 0);
+  const fulfilledLots = plans.filter(item => item.summary.fulfilled).length;
+  $('#lot-followup-summary').innerHTML = [
+    ['Lotes con plan', plans.length],
+    ['Visitas pendientes', pendingVisits],
+    ['Visitas atrasadas', overdueVisits],
+    ['Lotes cumplidos', fulfilledLots]
+  ].map(([label, count]) => '<div class="lot-followup-stat"><strong>' + count + '</strong><span>' + label + '</span></div>').join('');
+
+  const query = $('#lot-followup-search').value.trim().toLocaleLowerCase();
+  const filter = $('#lot-followup-filter').value;
+  const visible = plans.filter(item => {
+    const matchesFilter = filter === 'all' || item.summary.statusKey === filter;
+    const searchText = [item.farm, item.lotCode, item.plan.crop_state, item.plan.responsible].join(' ').toLocaleLowerCase();
+    return matchesFilter && (!query || searchText.includes(query));
+  });
+  const rows = visible.map(item => {
+    const { plan, lotCode, farm, summary } = item;
+    const details = summary.slots.map(slot =>
+      '<li><strong>Visita ' + slot.number + '</strong>: programada ' + esc(formatDate(slot.due_date)) + ' · ' + esc(slot.status) +
+      (slot.visit_date ? ' (' + esc(formatDate(slot.visit_date)) + ')' : '') + '</li>'
+    );
+    summary.actualVisits.slice(summary.requiredCount).forEach((visit, index) => {
+      details.push('<li><strong>Visita adicional ' + (index + 1) + '</strong>: ' + esc(formatDate(visit.visit_date)) + '</li>');
+    });
+    if (!details.length) details.push('<li>No hay visitas programadas para este lote.</li>');
+    const visitCount = summary.requiredCount
+      ? summary.actualCount + ' / ' + summary.requiredCount + ' requeridas'
+      : summary.actualCount + ' registradas · sin plan';
+    const nextVisit = summary.nextDueDate ? formatDate(summary.nextDueDate) : '—';
+    return '<tr>' +
+      '<td class="lot-followup-lot"><strong>' + esc(farm || 'Sin finca') + '</strong><small>Lote ' + esc(lotCode) + '</small></td>' +
+      '<td>' + esc(formatDate(plan.cycle_date)) + '</td>' +
+      '<td>' + esc(plan.crop_state || '—') + '</td>' +
+      '<td>' + esc(plan.responsible || '—') + '</td>' +
+      '<td><details class="lot-followup-visits"><summary>' + esc(visitCount) + '</summary><ul>' + details.join('') + '</ul></details></td>' +
+      '<td>' + esc(nextVisit) + '</td>' +
+      '<td><span class="lot-followup-status-pill is-' + esc(summary.statusKey) + '">' + esc(summary.statusLabel) + '</span>' +
+      (summary.pendingCount ? '<small class="followup-pending-note">' + summary.pendingCount + ' pendiente(s)</small>' : '') + '</td>' +
+      '<td><div class="lot-followup-actions"><button class="record-view-button" type="button" data-lot-followup-edit="' + esc(lotCode) + '">Editar</button></div></td>' +
+      '</tr>';
+  });
+  $('#lot-followup-rows').innerHTML = rows.length
+    ? rows.join('')
+    : '<tr><td colspan="8" class="lot-followup-empty">' + (plans.length ? 'No hay lotes que coincidan con el filtro.' : 'Todavía no hay planes de seguimiento cargados.') + '</td></tr>';
+}
+async function fetchAllLotFollowupPlans() {
+  const plans = [];
+  for (let offset = 0, page; ; offset += 1000) {
+    page = await cloudRequest('lot_visit_plans?select=lot_code,cycle_date,crop_state,responsible,visit_dates,updated_at&order=lot_code.asc&limit=1000&offset=' + offset);
+    if (!Array.isArray(page)) throw new Error('Supabase devolvió una lista de planes no válida.');
+    plans.push(...page);
+    if (page.length < 1000) return plans;
+  }
+}
+async function fetchAllLotFollowupVisits() {
+  const visits = [];
+  for (let offset = 0, page; ; offset += 1000) {
+    page = await cloudRequest('rpc/get_lot_followup_visits?select=record_id,lot_code,visit_date&order=record_id.asc,lot_code.asc&limit=1000&offset=' + offset, {
+      method: 'POST',
+      body: {}
+    });
+    if (!Array.isArray(page)) throw new Error('Supabase devolvió una lista de visitas no válida.');
+    visits.push(...page);
+    if (page.length < 1000) return visits;
+  }
+}
+async function loadLotFollowup() {
+  if (!canAccessLotFollowup()) return;
+  if (!state.configured) {
+    setLotFollowupStatus('Configura Supabase y aplica la migración de seguimiento para usar este módulo.', 'warning');
+    return;
+  }
+  if (!navigator.onLine) {
+    setLotFollowupStatus('Conéctate a internet para consultar los planes y las visitas compartidas.', 'warning');
+    return;
+  }
+  if (state.lotFollowupLoadPromise) return state.lotFollowupLoadPromise;
+  const userId = state.user.id;
+  const request = (async () => {
+    setLotFollowupStatus('Consultando planes y capturas de Malezas…', 'info');
+    await loadLotLookup();
+    const [plans, visits] = await Promise.all([fetchAllLotFollowupPlans(), fetchAllLotFollowupVisits()]);
+    if (!state.user || state.user.id !== userId) return;
+    state.lotFollowupPlans = plans;
+    state.lotFollowupVisits = visits;
+    renderLotFollowupLotOptions();
+    renderLotFollowup();
+  })();
+  state.lotFollowupLoadPromise = request;
+  try {
+    await request;
+  } catch (error) {
+    setLotFollowupStatus(error.message || 'No se pudo cargar el seguimiento desde Supabase.', 'warning');
+    throw error;
+  } finally {
+    if (state.lotFollowupLoadPromise === request) state.lotFollowupLoadPromise = null;
+  }
+}
+function editLotFollowup(lotCode) {
+  if (!canAccessLotFollowup()) return;
+  const plan = state.lotFollowupPlans.find(item => item.lot_code === lotCode);
+  if (!plan) {
+    setLotFollowupStatus('No se encontró el plan que intentas editar. Actualiza la lista e inténtalo de nuevo.', 'warning');
+    return;
+  }
+  resetLotFollowupForm();
+  state.editingLotFollowup = plan.lot_code;
+  $('#lot-followup-code').value = plan.lot_code;
+  $('#lot-followup-code').readOnly = true;
+  $('#lot-followup-cycle-date').value = String(plan.cycle_date || '').slice(0, 10);
+  $('#lot-followup-state').value = plan.crop_state || '';
+  $('#lot-followup-responsible').value = plan.responsible || '';
+  $('#lot-followup-form-title').textContent = 'Editar plan · lote ' + plan.lot_code;
+  $('#lot-followup-save').textContent = 'Guardar cambios';
+  $('#lot-followup-cancel-edit').hidden = false;
+  $('#lot-followup-date-inputs').innerHTML = '';
+  (Array.isArray(plan.visit_dates) && plan.visit_dates.length ? plan.visit_dates : ['']).forEach(addLotFollowupDateInput);
+  updateLotFollowupFarm();
+  setLotFollowupStatus('', '');
+  $('#lot-followup-form-title').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+async function saveLotFollowup(event) {
+  event.preventDefault();
+  if (!canAccessLotFollowup()) throw new Error('Solo una cuenta administradora o supervisora activa puede gestionar este módulo.');
+  if (!state.configured || !navigator.onLine) throw new Error('Conéctate a internet para guardar cambios en el espacio compartido.');
+  const form = $('#lot-followup-form');
+  if (!form.reportValidity()) return;
+  const lotCode = normalizeVisitMapLotCode($('#lot-followup-code').value);
+  const cycleDate = excelDateToIso($('#lot-followup-cycle-date').value);
+  if (!lotCode) throw new Error('Ingresa un código de lote válido.');
+  if (!cycleDate) throw new Error('Ingresa una fecha válida de siembra o corte.');
+  $('#lot-followup-code').value = lotCode;
+  if (!state.lotLookup[lotCode] && !(await refreshLotLookupEntry(lotCode))) {
+    throw new Error('El lote no existe en el catálogo o no está autorizado para tu cuenta.');
+  }
+  const visitDates = [];
+  let emptyVisitSeen = false;
+  for (const input of $$('[data-lot-followup-date]', $('#lot-followup-date-inputs'))) {
+    const date = excelDateToIso(input.value);
+    if (!date) { emptyVisitSeen = true; continue; }
+    if (emptyVisitSeen) throw new Error('Completa las fechas de visita en orden; no dejes espacios entre visitas.');
+    visitDates.push(date);
+  }
+  for (let index = 0; index < visitDates.length; index++) {
+    if (visitDates[index] < cycleDate) throw new Error('Las fechas de visita no pueden ser anteriores a la fecha de siembra o corte.');
+    if (index && visitDates[index] <= visitDates[index - 1]) throw new Error('Las fechas de visita deben ser únicas y estar en orden cronológico.');
+  }
+  const payload = {
+    lot_code: lotCode,
+    cycle_date: cycleDate,
+    crop_state: $('#lot-followup-state').value.trim(),
+    responsible: $('#lot-followup-responsible').value.trim(),
+    visit_dates: visitDates,
+    updated_at: new Date().toISOString()
+  };
+  const existingPlan = state.lotFollowupPlans.find(plan => plan.lot_code === lotCode);
+  if (!state.editingLotFollowup && existingPlan &&
+      !window.confirm('Ya existe un plan para este lote. ¿Deseas reemplazarlo con el nuevo ciclo y sus fechas?')) return;
+  const editingLot = state.editingLotFollowup || (existingPlan && existingPlan.lot_code);
+  let saved;
+  try {
+    saved = editingLot
+      ? await cloudRequest('lot_visit_plans?lot_code=eq.' + encodeURIComponent(editingLot), {
+        method: 'PATCH',
+        headers: { Prefer: 'return=representation' },
+        body: payload
+      })
+      : await cloudRequest('lot_visit_plans', {
+        method: 'POST',
+        headers: { Prefer: 'return=representation' },
+        body: payload
+      });
+  } catch (error) {
+    if (!editingLot && /duplicate key|unique constraint|lot_visit_plans_pkey/i.test(error.message)) {
+      throw new Error('Ya existe un plan para este lote. Actualiza la lista y edita el plan existente.');
+    }
+    throw error;
+  }
+  if (!Array.isArray(saved) || saved.length !== 1) throw new Error('Supabase no confirmó el guardado del plan.');
+  await loadLotFollowup();
+  resetLotFollowupForm();
+  setLotFollowupStatus('El plan del lote ' + lotCode + ' se guardó correctamente.', 'success');
+  toast(editingLot ? 'Plan actualizado.' : 'Plan guardado.');
+}
+async function importLotFollowupWorkbook(file) {
+  if (!canAccessLotFollowup()) throw new Error('Solo una cuenta administradora o supervisora activa puede importar planes.');
+  if (!state.configured || !navigator.onLine) throw new Error('Conéctate a internet para importar planes a Supabase.');
+  setLotFollowupStatus('Leyendo y validando el archivo Excel…', 'info');
+  const rows = await parseXlsxWorkbook(file);
+  const parsed = parseLotFollowupRows(rows);
+  if (parsed.errors.length) {
+    const details = parsed.errors.slice(0, 8).join(' · ');
+    throw new Error(details + (parsed.errors.length > 8 ? ' · y ' + (parsed.errors.length - 8) + ' error(es) más.' : ''));
+  }
+  await loadLotFollowup();
+  const issues = [];
+  for (const plan of parsed.plans) {
+    const authorizedLot = state.lotLookup[plan.lot_code];
+    if (!authorizedLot) {
+      issues.push('Lote ' + plan.lot_code + ' no existe en el catálogo o no está autorizado.');
+      continue;
+    }
+    if (plan.finca && authorizedLot.finca && normalizeLotFarmLabel(plan.finca) !== normalizeLotFarmLabel(authorizedLot.finca)) {
+      issues.push('La finca de la fila del lote ' + plan.lot_code + ' no coincide con el catálogo.');
+    }
+  }
+  if (issues.length) throw new Error(issues.slice(0, 8).join(' · ') + (issues.length > 8 ? ' · y ' + (issues.length - 8) + ' error(es) más.' : ''));
+  const existingLots = new Set(state.lotFollowupPlans.map(plan => plan.lot_code));
+  const replacementCount = parsed.plans.filter(plan => existingLots.has(plan.lot_code)).length;
+  if (replacementCount && !window.confirm('El archivo reemplazará los planes de ' + replacementCount + ' lote(s) que ya existen. ¿Deseas continuar?')) {
+    setLotFollowupStatus('', '');
+    return;
+  }
+  await cloudRequest('lot_visit_plans?on_conflict=lot_code', {
+    method: 'POST',
+    headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+    body: parsed.plans.map(plan => ({
+      lot_code: plan.lot_code,
+      cycle_date: plan.cycle_date,
+      crop_state: plan.crop_state,
+      responsible: plan.responsible,
+      visit_dates: plan.visit_dates,
+      updated_at: new Date().toISOString()
+    }))
+  });
+  await loadLotFollowup();
+  const savedPlans = new Map(state.lotFollowupPlans.map(plan => [plan.lot_code, plan]));
+  const unconfirmed = parsed.plans.filter(plan => {
+    const savedPlan = savedPlans.get(plan.lot_code);
+    return !savedPlan ||
+      savedPlan.cycle_date !== plan.cycle_date ||
+      (savedPlan.crop_state || '') !== plan.crop_state ||
+      (savedPlan.responsible || '') !== plan.responsible ||
+      JSON.stringify(savedPlan.visit_dates || []) !== JSON.stringify(plan.visit_dates);
+  });
+  if (unconfirmed.length) {
+    throw new Error('La base de datos no confirmó todos los planes del archivo: ' + unconfirmed.slice(0, 5).map(plan => plan.lot_code).join(', ') + '.');
+  }
+  setLotFollowupStatus('Se importaron ' + parsed.plans.length + ' plan(es); ' + replacementCount + ' reemplazaron un plan existente.', 'success');
+  toast('Importación completada: ' + parsed.plans.length + ' lote(s).');
+}
 function renderHome() {
   renderGroups($('#module-groups'));
   renderGroups($('#module-picker'));
@@ -2277,8 +2906,10 @@ function renderHome() {
   $('#open-visit-map').hidden = !['admin', 'supervisor'].includes(state.user.role);
   $('.admin-nav').hidden = !isActiveAdmin();
   $('.admin-mobile-nav').hidden = !isActiveAdmin();
+  $$('.reviewer-nav').forEach(button => { button.hidden = !canAccessLotFollowup(); });
   $('#invite-user-form').hidden = !isActiveAdmin();
   $('#create-user-form').hidden = !isActiveAdmin();
+  resetLotFollowupForm();
   populateInviteRoles();
   populateCreateUserRoles();
   $('#home-subtitle').textContent = state.user.role === 'aereo' ? 'Captura vuelos y datos de apoyo para aplicaciones aéreas.' : state.user.role === 'terrestre' ? 'Captura calibraciones y labores de aplicación terrestre.' : state.user.role === 'supervisor' ? 'Revisa capturas y los apartados de Malezas y Calidad.' : 'Administra perfiles y revisa las capturas aéreas y terrestres.';
@@ -2287,6 +2918,7 @@ function renderHome() {
 function navigate(page) {
   if (!state.user) return;
   if (page === 'usuarios' && !isActiveAdmin()) { toast('Solo una cuenta administradora activa puede gestionar usuarios.'); return; }
+  if (page === 'seguimiento-lotes' && !canAccessLotFollowup()) { toast('Solo una cuenta administradora o supervisora activa puede consultar el seguimiento de lotes.'); return; }
   if (state.recordTimeTimer) { clearInterval(state.recordTimeTimer); state.recordTimeTimer = null; }
   if (page !== 'capturar' && state.editingRecord) {
     state.editingRecord = null;
@@ -2318,6 +2950,7 @@ function navigate(page) {
   }
   if (page === 'pendientes' || page === 'registros' || page === 'gestionar' || page === 'inicio') refreshLists();
   if (page === 'usuarios') refreshUsers().catch(handleCloudError);
+  if (page === 'seguimiento-lotes') loadLotFollowup().catch(error => console.error('No se pudo actualizar el seguimiento de lotes.', error));
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 function updateConnection() {
@@ -2343,6 +2976,7 @@ function handleCloudError(error) {
 async function startSession(user, session) {
   state.authSession = session;
   state.visitMap = null;
+  clearLotFollowupData();
   saveAuthSession(session);
   saveProfile(user);
   if (user.status !== 'active' || user.role === 'pending') {
@@ -2375,6 +3009,7 @@ async function endSession() {
   state.authSession = null;
   state.user = null;
   state.visitMap = null;
+  clearLotFollowupData();
   const mapDialog = $('#visit-map-dialog');
   if (mapDialog.open) mapDialog.close();
   $('#visit-map-stage').innerHTML = '';
@@ -2429,6 +3064,17 @@ document.addEventListener('click', event => {
     deleteCapture(deleteRecordButton.dataset.deleteRecord).catch(error => {
       console.error(error);
       toast('No se pudo actualizar la captura guardada en este dispositivo.');
+    });
+    return;
+  }
+  const lotFollowupEditButton = event.target.closest('[data-lot-followup-edit]');
+  if (lotFollowupEditButton) { editLotFollowup(lotFollowupEditButton.dataset.lotFollowupEdit); return; }
+  if (event.target.closest('#lot-followup-add-date')) { addLotFollowupDateInput(''); return; }
+  const removeLotFollowupDateButton = event.target.closest('[data-remove-lot-followup-date]');
+  if (removeLotFollowupDateButton) {
+    removeLotFollowupDateButton.closest('.lot-followup-date-row').remove();
+    $$('.lot-followup-date-row', $('#lot-followup-date-inputs')).forEach((row, index) => {
+      $('.field-label', row).textContent = 'VISITA ' + (index + 1);
     });
     return;
   }
@@ -2785,6 +3431,11 @@ async function reviewRecord(recordId, decision) {
   await syncCloudRecords(false);
   toast(decision === 'approved' ? 'Captura aprobada.' : 'Captura rechazada.');
 }
+function handleLotFollowupError(error) {
+  console.error('No se pudo completar la operación de seguimiento de lotes.', error);
+  setLotFollowupStatus(error.message || 'No se pudo completar la operación.', 'warning');
+  toast(error.message || 'No se pudo completar la operación de seguimiento.');
+}
 $('#check-access').addEventListener('click', async () => {
   try { await refreshCloudProfile(); }
   catch (error) { authMessage('pending-error', error.message || 'No se pudo comprobar el acceso.'); }
@@ -2822,14 +3473,51 @@ $('#sync-now').addEventListener('click', async () => {
     toast(result.uploaded + ' capturas nuevas sincronizadas; ' + deleted + result.downloaded + ' registros compartidos actualizados.');
   } catch (error) { handleCloudError(error); }
 });
+$('#lot-followup-form').addEventListener('submit', event => {
+  saveLotFollowup(event).catch(handleLotFollowupError);
+});
+$('#lot-followup-code').addEventListener('input', updateLotFollowupFarm);
+$('#lot-followup-code').addEventListener('change', async () => {
+  const lotCode = normalizeVisitMapLotCode($('#lot-followup-code').value);
+  if (!lotCode || state.lotLookup[lotCode]) { updateLotFollowupFarm(); return; }
+  try {
+    await refreshLotLookupEntry(lotCode);
+    updateLotFollowupFarm();
+  } catch (error) {
+    handleLotFollowupError(error);
+  }
+});
+$('#lot-followup-cancel-edit').addEventListener('click', () => {
+  resetLotFollowupForm();
+  setLotFollowupStatus('', '');
+});
+$('#lot-followup-refresh').addEventListener('click', () => loadLotFollowup().catch(handleLotFollowupError));
+$('#lot-followup-search').addEventListener('input', renderLotFollowup);
+$('#lot-followup-filter').addEventListener('change', renderLotFollowup);
+$('#lot-followup-import').addEventListener('change', async event => {
+  const input = event.currentTarget;
+  const file = input.files && input.files[0];
+  if (!file) return;
+  try {
+    await importLotFollowupWorkbook(file);
+  } catch (error) {
+    handleLotFollowupError(error);
+  } finally {
+    input.value = '';
+  }
+});
 $('#export-all').addEventListener('click', async () => downloadJson(visibleLocalRecords(await getRecords()), 'mym-campo-' + localDate() + '.json'));
 $('#export-pending').addEventListener('click', async () => downloadJson(visibleLocalRecords(await getRecords()).filter(record => record.syncStatus === 'pending'), 'mym-campo-pendientes-' + localDate() + '.json'));
 $('#logout-button').addEventListener('click', endSession);
 window.addEventListener('online', () => {
   updateConnection();
   syncCloudRecords(false).catch(handleCloudError);
+  if (state.user && !$('#page-seguimiento-lotes').hidden) loadLotFollowup().catch(handleLotFollowupError);
 });
-window.addEventListener('offline', updateConnection);
+window.addEventListener('offline', () => {
+  updateConnection();
+  if (!$('#page-seguimiento-lotes').hidden) setLotFollowupStatus('Sin conexión. El seguimiento compartido y sus cambios requieren conexión a internet.', 'warning');
+});
 async function init() {
   try {
     try { state.configured = !!supabaseConfig(); }

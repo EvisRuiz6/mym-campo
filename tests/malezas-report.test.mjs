@@ -12,7 +12,7 @@ const escapeHtml = value => String(value).replace(/[&<>"']/g, character => ({
 })[character]);
 const helpers = runInNewContext(
   appSource.slice(helperStart, helperEnd) +
-  '\n({ malezasReportRows, malezasReportMapSvg, formatVisitMapControlPercent })',
+  '\n({ malezasReportRows, malezasReportMapSvg, malezasReportControlClass, formatVisitMapControlPercent })',
   { esc: escapeHtml }
 );
 const reportStart = appSource.indexOf('function malezasReportDocument(record, boundaries) {');
@@ -26,6 +26,7 @@ const buildReport = runInNewContext(
     formatDate: value => 'Fecha ' + value,
     formatVisitMapControlPercent: helpers.formatVisitMapControlPercent,
     malezasReportRows: helpers.malezasReportRows,
+    malezasReportControlClass: helpers.malezasReportControlClass,
     malezasReportMapSvg: helpers.malezasReportMapSvg,
     recordDetailTime: value => value || '',
     recordStatus: () => 'En cola',
@@ -94,9 +95,26 @@ test('maps only sampled lots and colors each polygon with its control percentage
 
   const map = helpers.malezasReportMapSvg(boundaries, rows);
   assert.deepEqual([...map.lotCodes], ['0000017']);
-  assert.match(map.markup, /control-medium-high/);
+  assert.match(map.markup, /malezas-map-lot is-visited control-medium-low/);
   assert.match(map.markup, /0000017/);
   assert.doesNotMatch(map.markup, /0000099/);
+});
+
+test('classifies every control percentage in non-overlapping PDF color ranges', () => {
+  const ranges = [
+    [0, 'control-low'],
+    [69.99, 'control-low'],
+    [70, 'control-medium-low'],
+    [74.99, 'control-medium-low'],
+    [75, 'control-medium-high'],
+    [85, 'control-medium-high'],
+    [85.01, 'control-high'],
+    [100, 'control-high']
+  ];
+  for (const [percent, expected] of ranges) {
+    assert.equal(helpers.malezasReportControlClass(percent), expected);
+  }
+  assert.equal(helpers.malezasReportControlClass(null), 'control-missing');
 });
 
 test('builds a printable report with the sampled map, derived metrics, and photos', () => {
@@ -130,7 +148,11 @@ test('builds a printable report with the sampled map, derived metrics, and photo
 
   const html = buildReport(record, boundaries);
   assert.match(html, /MUESTREO DE MALEZAS/);
-  assert.match(html, /control-medium-high/);
+  assert.match(html, /class="malezas-report-control-value control-medium-low">72\.5%<\/strong>/);
+  assert.match(html, /Menos de 70%/);
+  assert.match(html, /70% a menos de 75%/);
+  assert.match(html, /75% a 85%/);
+  assert.match(html, /Más de 85%/);
   assert.match(html, /72\.5%/);
   assert.match(html, /27\.5%/);
   assert.match(html, /src="data:image\/jpeg;base64,Zm9v"/);

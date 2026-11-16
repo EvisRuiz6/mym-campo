@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#174b38">
   <meta name="description" content="Captura de labores aéreas y terrestres para MyM Data">
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="app.css?v=20">
+  <link rel="stylesheet" href="app.css?v=21">
   <title>MyM Campo</title>
 </head>
 <body>
@@ -96,6 +96,7 @@
         <button class="nav-item" data-page="pendientes"><span class="nav-icon">◷</span> Pendientes <b id="pending-badge" class="nav-count">0</b></button>
         <button class="nav-item" data-page="registros"><span class="nav-icon">▤</span> Registros del dispositivo</button>
         <button class="nav-item" data-page="gestionar"><span class="nav-icon">✎</span> Administrar capturas</button>
+        <button class="nav-item reviewer-nav" data-page="seguimiento-lotes" hidden><span class="nav-icon">◷</span> Seguimiento de lotes</button>
         <button class="nav-item admin-nav" data-page="usuarios" hidden><span class="nav-icon">♙</span> Usuarios</button>
         <div class="side-note"><span class="sync-dot"></span><div><strong>Captura y sincronización</strong><small>Las capturas sin conexión quedan en cola y se envían al recuperar conexión.</small></div></div>
       </aside>
@@ -147,6 +148,61 @@
           <p class="record-query-hint">Los cambios de registros sincronizados requieren conexión. Las capturas que siguen en cola pueden editarse o eliminarse sin conexión; editar una captura revisada la devuelve a revisión pendiente.</p>
           <div class="record-toolbar"><label class="search-field">⌕ <input id="manage-record-search" type="search" placeholder="Buscar por finca, actividad o responsable" aria-label="Buscar capturas para administrar"></label><span id="manage-record-total" class="muted-inline">0 capturas</span></div>
           <div id="manage-record-list" class="record-list"></div>
+        </section>
+
+        <section id="page-seguimiento-lotes" class="page" hidden>
+          <p class="eyebrow">GESTIÓN DE CICLOS Y VISITAS</p>
+          <h1>Seguimiento de lotes</h1>
+          <p class="subtitle">Registra la fecha de siembra o corte y compara las visitas programadas con las capturas guardadas en Malezas.</p>
+          <div id="lot-followup-status" class="status-strip warning-strip" role="status" aria-live="polite" hidden>
+            <span class="status-check">!</span><div id="lot-followup-status-text"></div>
+          </div>
+          <div id="lot-followup-summary" class="lot-followup-summary" aria-live="polite"></div>
+
+          <section class="form-section lot-followup-form-section">
+            <div class="section-heading">
+              <div><p class="eyebrow">PLAN POR LOTE</p><h2 id="lot-followup-form-title">Registrar lote</h2></div>
+            </div>
+            <form id="lot-followup-form" novalidate>
+              <div class="field-grid">
+                <div class="field"><label class="field-label" for="lot-followup-code">Lote</label><input id="lot-followup-code" class="text-input" maxlength="60" list="lot-followup-lot-options" autocomplete="off" required><datalist id="lot-followup-lot-options"></datalist></div>
+                <div class="field"><label class="field-label" for="lot-followup-farm">Finca</label><input id="lot-followup-farm" class="text-input" readonly placeholder="Se completa al seleccionar un lote autorizado"></div>
+                <div class="field"><label class="field-label" for="lot-followup-cycle-date">Fecha siembra/corte</label><input id="lot-followup-cycle-date" class="text-input" type="date" required></div>
+                <div class="field"><label class="field-label" for="lot-followup-state">Estado</label><input id="lot-followup-state" class="text-input" maxlength="80"></div>
+                <div class="field full"><label class="field-label" for="lot-followup-responsible">Responsable</label><input id="lot-followup-responsible" class="text-input" maxlength="120"></div>
+              </div>
+              <div class="lot-followup-date-editor">
+                <div class="section-heading"><div><p class="eyebrow">VISITAS PROGRAMADAS</p><h3>Fechas de visita</h3></div></div>
+                <div id="lot-followup-date-inputs"></div>
+                <button id="lot-followup-add-date" class="add-row" type="button">＋ Agregar fecha de visita</button>
+              </div>
+              <div class="form-actions">
+                <button id="lot-followup-cancel-edit" class="secondary-button" type="button" hidden>Cancelar edición</button>
+                <button id="lot-followup-save" class="primary-button" type="submit">Guardar plan</button>
+              </div>
+              <p class="form-footnote">Se administra un plan vigente por lote. Al importar un lote existente, el sistema pedirá confirmación antes de reemplazar su plan actual.</p>
+            </form>
+          </section>
+
+          <div class="record-toolbar lot-followup-toolbar">
+            <label class="search-field">⌕ <input id="lot-followup-search" type="search" placeholder="Buscar finca, lote o responsable" aria-label="Buscar planes por lote"></label>
+            <select id="lot-followup-filter" class="select-input" aria-label="Filtrar estado del seguimiento">
+              <option value="all">Todos los estados</option>
+              <option value="overdue">Visita atrasada</option>
+              <option value="pending">Visitas pendientes</option>
+              <option value="complete">Cumplidos</option>
+              <option value="unscheduled">Sin visitas programadas</option>
+            </select>
+            <button id="lot-followup-refresh" class="secondary-button" type="button">Actualizar</button>
+            <label class="secondary-button lot-followup-import-button" for="lot-followup-import">Importar Excel<input id="lot-followup-import" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden></label>
+          </div>
+          <p class="record-query-hint">El archivo debe incluir FECHA SIEMBRA/CORTE, FINCA, LOTE, ESTADO, RESPONSABLE y las fechas VISITA 1, VISITA 2, VISITA 3. La importación procesa la primera hoja.</p>
+          <div class="lot-followup-table-wrap">
+            <table class="lot-followup-table">
+              <thead><tr><th>Finca / lote</th><th>Siembra / corte</th><th>Estado</th><th>Responsable</th><th>Visitas</th><th>Próxima visita</th><th>Seguimiento</th><th>Acciones</th></tr></thead>
+              <tbody id="lot-followup-rows"><tr><td colspan="8" class="lot-followup-empty">Carga los planes para consultar el seguimiento.</td></tr></tbody>
+            </table>
+          </div>
         </section>
 
         <section id="page-usuarios" class="page" hidden>
@@ -222,10 +278,10 @@
         <form method="dialog" class="dialog-actions"><button class="secondary-button" type="submit">Cerrar</button></form>
       </div>
     </dialog>
-    <nav class="mobile-nav" aria-label="Navegación móvil"><button data-page="inicio" class="active"><span>⌂</span>Inicio</button><button data-page="capturar"><span>＋</span>Capturar</button><button data-page="pendientes"><span>◷</span>Pendientes</button><button data-page="registros"><span>▤</span>Registros</button><button class="admin-mobile-nav" data-page="usuarios" hidden><span>♙</span>Usuarios</button></nav>
+    <nav class="mobile-nav" aria-label="Navegación móvil"><button data-page="inicio" class="active"><span>⌂</span>Inicio</button><button data-page="capturar"><span>＋</span>Capturar</button><button data-page="pendientes"><span>◷</span>Pendientes</button><button data-page="registros"><span>▤</span>Registros</button><button class="reviewer-nav" data-page="seguimiento-lotes" aria-label="Seguimiento de lotes" hidden><span>◷</span>Lotes</button><button class="admin-mobile-nav" data-page="usuarios" hidden><span>♙</span>Usuarios</button></nav>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </div>
   <script src="config.js"></script>
-  <script src="app.js?v=37"></script>
+  <script src="app.js?v=39"></script>
 </body>
 </html>

@@ -213,7 +213,7 @@ const childSchemas = {
 };
 const $ = (selector, root) => (root || document).querySelector(selector);
 const $$ = (selector, root) => [...(root || document).querySelectorAll(selector)];
-const state = { db: null, user: null, authSession: null, configured: false, syncConnected: false, syncBusy: false, refreshPromise: null, currentModule: null, recordTimeTimer: null, lotLookup: Object.create(null), lotLookupRequests: new Map(), zoneOptions: [], visitMap: null, acceptingInvite: false };
+const state = { db: null, user: null, authSession: null, configured: false, syncConnected: false, syncBusy: false, refreshPromise: null, currentModule: null, editingRecord: null, recordTimeTimer: null, lotLookup: Object.create(null), lotLookupRequests: new Map(), zoneOptions: [], visitMap: null, acceptingInvite: false };
 
 function lotLookupCacheKey() {
   const scopeKey = [state.user.role, ...(state.user.allowedZones || []).slice().sort()].join(':');
@@ -309,6 +309,7 @@ function storeRequest(storeName, mode, action) {
 const getRecords = () => storeRequest('records', 'readonly', store => store.getAll());
 const getRecord = id => storeRequest('records', 'readonly', store => store.get(id));
 const putRecord = record => storeRequest('records', 'readwrite', store => store.put(record));
+const deleteRecord = id => storeRequest('records', 'readwrite', store => store.delete(id));
 function supabaseConfig() {
   const config = window.MYM_CONFIG || {};
   const url = String(config.supabaseUrl || '').trim().replace(/\/+$/, '');
@@ -414,7 +415,21 @@ async function syncCloudRecords(importLegacy) {
   }
   state.syncBusy = true;
   try {
-    const records = await getRecords();
+    let records = await getRecords();
+    let deleted = 0;
+    const queuedDeletions = records.filter(record =>
+      record.syncStatus === 'delete-pending' &&
+      (record.ownerUsername === state.user.username || isActiveAdmin())
+    );
+    for (const record of queuedDeletions) {
+      await cloudRequest('rpc/delete_field_record', {
+        method: 'POST',
+        body: { p_record_id: record.id }
+      });
+      await deleteRecord(record.id);
+      deleted += 1;
+    }
+    records = records.filter(record => record.syncStatus !== 'delete-pending');
     const outgoing = records.filter(record =>
       record.syncStatus === 'pending' &&
       record.ownerUsername === state.user.username &&
@@ -445,11 +460,18 @@ async function syncCloudRecords(importLegacy) {
       remote.push(...page);
       if (page.length < 1000) break;
     }
+    const remoteIds = new Set(remote.map(row => row.id));
+    const staleLocalRecords = (await getRecords()).filter(record =>
+      record.syncStatus === 'synced' &&
+      !remoteIds.has(record.id) &&
+      (record.ownerUsername === state.user.username || ['admin', 'supervisor'].includes(state.user.role))
+    );
+    await Promise.all(staleLocalRecords.map(record => deleteRecord(record.id)));
     await Promise.all(remote.map(row => putRecord(mapCloudRecord(row))));
     state.syncConnected = true;
     updateConnection();
     await refreshLists();
-    return { uploaded: outgoing.length, downloaded: remote.length };
+    return { uploaded: outgoing.length, downloaded: remote.length, deleted };
   } finally {
     state.syncBusy = false;
   }
@@ -917,7 +939,8 @@ function rowMarkup(kind, index) {
 }
 function chooseModule(key) {
   const module = modules[key];
-  if (!module || !userCanOpenModule(key)) { toast('Este apartado no está disponible para tu perfil.'); return; }
+  const canEditExisting = state.editingRecord && state.editingRecord.tipo === key && canManageRecord(state.editingRecord);
+  if (!module || (!userCanOpenModule(key) && !canEditExisting)) { toast('Este apartado no está disponible para tu perfil.'); return; }
   state.currentModule = key;
   $('#form-title').textContent = module.title;
   $('#form-subtitle').textContent = module.subtitle;
@@ -925,7 +948,7 @@ function chooseModule(key) {
   $('#capture-form').hidden = false;
   $('#form-fields').innerHTML = renderers[key]();
   if (state.recordTimeTimer) clearInterval(state.recordTimeTimer);
-  state.recordTimeTimer = setInterval(() => {
+  state.recordTimeTimer = state.editingRecord ? null : setInterval(() => {
     const input = $('#f-recorded-at');
     if (input) input.value = localTime();
   }, 15000);
@@ -936,11 +959,11 @@ function chooseModule(key) {
     $('#add-weather').addEventListener('click', add);
     $('#weather-rows').addEventListener('click', event => { if (event.target.matches('.remove-row')) event.target.closest('.repeat-row').remove(); });
     $('#retry-location').addEventListener('click', captureLocation);
-    captureLocation();
+    if (!state.editingRecord) captureLocation();
   }
   if (key === 'malezas') {
     $('#weeds-retry-location').addEventListener('click', captureWeedsLocation);
-    captureWeedsLocation();
+    if (!state.editingRecord) captureWeedsLocation();
   }
   if (key === 'epp') {
     const updateEppSummary = () => {
@@ -991,7 +1014,7 @@ function chooseModule(key) {
   $$('.picker-groups [data-module]').forEach(button => button.classList.toggle('selected', button.dataset.module === key));
   $('#capture-form').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
-async function serializeForm(form, recordId) {
+async function serializeForm(form, recordId, previousData) {
   const attachment = file => new Promise((resolve, reject) => {
     if (!file || !file.name) { resolve(null); return; }
     const reader = new FileReader();
@@ -1003,9 +1026,15 @@ async function serializeForm(form, recordId) {
     const selected = Array.from(files || []);
     return selected.length ? Promise.all(selected.map(attachment)) : Promise.resolve(null);
   };
-  const data = {};
+  const data = previousData && typeof previousData === 'object' && !Array.isArray(previousData)
+    ? { ...previousData }
+    : {};
   for (const [key, value] of new FormData(form).entries()) {
-    data[key] = typeof File !== 'undefined' && value instanceof File ? await attachment(value) : value;
+    if (typeof File !== 'undefined' && value instanceof File) {
+      data[key] = await attachment(value) || (previousData && previousData[key]) || null;
+    } else {
+      data[key] = value;
+    }
   }
   if (state.currentModule === 'clima') data.lecturas = $$('.repeat-row', $('#weather-rows')).map(row => Object.fromEntries(new FormData(row).entries()));
   if (state.currentModule === 'epp') {
@@ -1019,26 +1048,210 @@ async function serializeForm(form, recordId) {
     data.personas_llegaron = Number(data.personas_llegaron) || 0;
   }
   if (state.currentModule === 'vuelos') data.litros_por_hectarea = Number(data.area_ha) > 0 ? Number(data.litros) / Number(data.area_ha) : null;
-  const subregistros = {};
+  const oldSubrecords = previousData && previousData.subregistros &&
+    typeof previousData.subregistros === 'object' && !Array.isArray(previousData.subregistros)
+    ? previousData.subregistros
+    : {};
+  const subregistros = { ...oldSubrecords };
   for (const list of $$('[data-repeat-list]', $('#form-fields'))) {
     const key = list.dataset.repeatList;
     if (key === 'malezas_detalle') $$('.child-row', list).forEach(updateWeedsCatorcena);
-    subregistros[key] = await Promise.all($$('.child-row', list).map(async row => Object.fromEntries(await Promise.all($$('[data-child-field]', row).map(async input => [
-      input.dataset.childField, input.type === 'file'
-        ? await (input.multiple ? attachments(input.files) : attachment(input.files && input.files[0]))
-        : input.value
-    ])))));
+    const oldRows = Array.isArray(oldSubrecords[key]) ? oldSubrecords[key] : [];
+    subregistros[key] = await Promise.all($$('.child-row', list).map(async (row, rowIndex) => {
+      const originalIndex = Number(row.dataset.originalIndex);
+      const oldRow = Number.isInteger(originalIndex) && originalIndex >= 0 ? oldRows[originalIndex] : null;
+      const serialized = Object.fromEntries(await Promise.all($$('[data-child-field]', row).map(async input => {
+        const value = input.type === 'file'
+          ? await (input.multiple ? attachments(input.files) : attachment(input.files && input.files[0]))
+          : input.value;
+        const previousValue = oldRow && oldRow[input.dataset.childField];
+        return [
+          input.dataset.childField,
+          input.type === 'file' ? value || previousValue || null : value
+        ];
+      })));
+      if (key === 'malezas_detalle') {
+        serialized.ID = oldRow && oldRow.ID || crypto.randomUUID();
+        serialized.ID_NEW = recordId;
+      }
+      return serialized;
+    }));
   }
   if (state.currentModule === 'malezas') {
     data.ID = recordId;
-    (subregistros.malezas_detalle || []).forEach(detail => {
-      detail.ID = crypto.randomUUID();
-      detail.ID_NEW = recordId;
-    });
   }
   if (state.currentModule === 'calidad') data.ID = recordId;
   if (Object.keys(subregistros).length) data.subregistros = subregistros;
   return data;
+}
+function setFormValue(input, value) {
+  if (!input || input.type === 'file') return;
+  const text = value == null ? '' : String(value);
+  if (input.tagName === 'SELECT' && text && ![...input.options].some(option => option.value === text)) {
+    const option = document.createElement('option');
+    option.value = text;
+    option.textContent = text;
+    input.add(option);
+  }
+  if (input.type === 'checkbox') input.checked = value === true || value === 'true';
+  else input.value = text;
+}
+function setAttachmentHint(input, value) {
+  if (!input || input.type !== 'file' || !value) return;
+  const attachments = (Array.isArray(value) ? value : [value]).filter(item => item && typeof item === 'object');
+  if (!attachments.length) return;
+  const field = input.closest('.field');
+  if (!field) return;
+  let hint = $('.field-hint', field);
+  if (!hint) {
+    hint = document.createElement('small');
+    hint.className = 'field-hint';
+    field.append(hint);
+  }
+  const names = attachments.map(item => item.name || 'Archivo adjunto');
+  hint.textContent = 'Adjunto actual: ' + names.join(', ') + '. Se conserva si no seleccionas otro.';
+}
+function setNamedFields(root, values) {
+  if (!values || typeof values !== 'object') return;
+  for (const input of $$('[name]', root)) {
+    if (!Object.prototype.hasOwnProperty.call(values, input.name)) continue;
+    setFormValue(input, values[input.name]);
+    setAttachmentHint(input, values[input.name]);
+  }
+}
+function setChildFields(row, values) {
+  if (!values || typeof values !== 'object') return;
+  for (const input of $$('[data-child-field]', row)) {
+    const key = input.dataset.childField;
+    if (!Object.prototype.hasOwnProperty.call(values, key)) continue;
+    setFormValue(input, values[key]);
+    setAttachmentHint(input, values[key]);
+  }
+}
+function populateCaptureForm(record) {
+  const form = $('#capture-form');
+  const data = record.datos || {};
+  const details = data.subregistros && typeof data.subregistros === 'object' && !Array.isArray(data.subregistros)
+    ? data.subregistros
+    : {};
+  if (record.tipo === 'calidad') {
+    setFormValue($('[name="calidad_tipo"]', form), data.calidad_tipo);
+    renderQualityDetails(data.calidad_tipo);
+  } else if (record.tipo === 'calibracion_aguilon') {
+    setFormValue($('[name="tipo_aguilon"]', form), data.tipo_aguilon);
+    renderAguilonDetails(data.tipo_aguilon);
+  } else if (record.tipo === 'calibraciones_pcpm') {
+    setFormValue($('[name="labor_pcpm"]', form), data.labor_pcpm);
+    renderPcpmDetails(data.labor_pcpm);
+  }
+  setNamedFields(form, data);
+  if (record.tipo === 'clima') {
+    const target = $('#weather-rows');
+    const readings = Array.isArray(data.lecturas) ? data.lecturas : [];
+    target.innerHTML = '';
+    readings.forEach((reading, index) => {
+      target.insertAdjacentHTML('beforeend', rowMarkup('weather', index));
+      const row = target.lastElementChild;
+      row.dataset.originalIndex = String(index);
+      setNamedFields(row, reading);
+    });
+  }
+  if (record.tipo === 'epp') {
+    const attendance = data.asistencia_por_funcion || {};
+    for (const input of $$('.attendance-count', $('#form-fields'))) {
+      setFormValue(input, attendance[input.dataset.function] == null ? 0 : attendance[input.dataset.function]);
+    }
+    const compliance = data.cumplimiento_epp_por_funcion || {};
+    for (const input of $$('.epp-item-count', $('#form-fields'))) {
+      const roleItems = compliance[input.dataset.function] || {};
+      setFormValue(input, roleItems[input.dataset.item] == null ? 0 : roleItems[input.dataset.item]);
+    }
+    const firstItem = $('.epp-item-count', $('#form-fields'));
+    if (firstItem) firstItem.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  if (record.tipo === 'vuelos') {
+    const area = $('[name="area_ha"]', form);
+    if (area) area.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  for (const list of $$('[data-repeat-list]', $('#form-fields'))) {
+    const rows = Array.isArray(details[list.dataset.repeatList]) ? details[list.dataset.repeatList] : [];
+    list.innerHTML = '';
+    rows.forEach((rowData, index) => {
+      addChildRow(list.dataset.repeatList);
+      const row = list.lastElementChild;
+      row.dataset.originalIndex = String(index);
+      setChildFields(row, rowData);
+      if (list.dataset.repeatList === 'malezas_detalle') {
+        const detailDate = row.querySelector('[data-child-field="FECHA"]');
+        const visitDate = data.FECHA || data.fecha || '';
+        if (detailDate) {
+          if (detailDate.value === visitDate) detailDate.dataset.visitDateValue = detailDate.value;
+          else {
+            delete detailDate.dataset.visitDateValue;
+            detailDate.dataset.visitDateManual = 'true';
+          }
+        }
+        updateWeedsCatorcena(row);
+      }
+    });
+  }
+}
+async function editCapture(recordId) {
+  const record = await getRecord(recordId);
+  if (!record || !canManageRecord(record)) {
+    toast('No tienes permiso para editar esta captura.');
+    return;
+  }
+  if (record.syncStatus === 'synced' && !navigator.onLine) {
+    toast('Conéctate a internet para editar una captura sincronizada.');
+    return;
+  }
+  if (!modules[record.tipo] || !record.datos || typeof record.datos !== 'object') {
+    toast('No se puede editar el formato de esta captura.');
+    return;
+  }
+  navigate('capturar');
+  state.editingRecord = record;
+  chooseModule(record.tipo);
+  populateCaptureForm(record);
+  $('#capture-eyebrow').textContent = 'EDITAR CAPTURA';
+  $('#form-title').textContent = 'Editar ' + modules[record.tipo].title;
+  $('#form-subtitle').textContent = record.syncStatus === 'synced'
+    ? 'Los cambios se guardarán en el espacio compartido y volverán a revisión pendiente.'
+    : 'Esta captura sigue en cola y puedes editarla sin conexión.';
+  $('#capture-submit').textContent = 'Guardar cambios';
+}
+async function deleteCapture(recordId) {
+  const record = await getRecord(recordId);
+  if (!record || !canManageRecord(record)) {
+    toast('No tienes permiso para eliminar esta captura.');
+    return;
+  }
+  const isSynced = record.syncStatus === 'synced';
+  if (isSynced && !navigator.onLine) {
+    toast('Conéctate a internet para eliminar una captura sincronizada.');
+    return;
+  }
+  if (!window.confirm('¿Eliminar permanentemente "' + titleFor(record) + '"? Esta acción no se puede deshacer.')) return;
+  if (navigator.onLine) {
+    try {
+      await cloudRequest('rpc/delete_field_record', {
+        method: 'POST',
+        body: { p_record_id: record.id }
+      });
+    } catch (error) {
+      handleCloudError(error);
+      return;
+    }
+    await deleteRecord(record.id);
+  } else {
+    record.syncStatus = 'delete-pending';
+    await putRecord(record);
+  }
+  await refreshLists();
+  toast(navigator.onLine
+    ? 'Captura eliminada.'
+    : 'Captura retirada del dispositivo; la eliminación se completará al recuperar conexión.');
 }
 function titleFor(record) {
   if (record.tipo === 'clima') return (record.datos.lecturas || []).length + ' lecturas de clima';
@@ -1531,7 +1744,7 @@ async function showRecordDetails(recordId) {
   }
   if (!dialog.open) dialog.showModal();
 }
-function recordRow(record) {
+function recordRow(record, management) {
   const module = modules[record.tipo] || { icon: '•' };
   const site = record.datos.finca || record.datos.lote || record.datos.id_lote || 'Sin finca/lote';
   const detail = [site, record.ownerName, formatDate(record.datos.fecha || record.datos.FECHA)].filter(Boolean).join(' · ');
@@ -1540,23 +1753,44 @@ function recordRow(record) {
   const actions = reviewer && record.ownerId && record.ownerId !== state.user.id && record.reviewStatus === 'pending'
     ? '<span class="record-review-actions"><button type="button" data-review="approved" data-record-id="' + esc(record.id) + '">Aprobar</button><button type="button" data-review="rejected" data-record-id="' + esc(record.id) + '">Rechazar</button></span>'
     : '';
+  const manageActions = management && canManageRecord(record)
+    ? '<span class="record-manage-actions"><button type="button" class="record-view-button" data-edit-record="' + esc(record.id) + '">Editar</button><button type="button" class="record-delete-button" data-delete-record="' + esc(record.id) + '">Eliminar</button></span>'
+    : '';
   const viewAction = '<button type="button" class="record-view-button" data-view-record="' + esc(record.id) + '" aria-label="Ver datos de ' + esc(titleFor(record)) + '">Ver datos</button>';
   const pdfAction = record.tipo === 'epp' ? '<button type="button" class="record-view-button" data-epp-pdf="' + esc(record.id) + '" aria-label="Generar PDF de ' + esc(titleFor(record)) + '">Generar PDF</button>' : '';
-  return '<article class="record-row"><span class="record-symbol" aria-hidden="true">' + module.icon + '</span><span class="record-info"><strong>' + esc(titleFor(record)) + '</strong><small>' + esc(detail) + '</small></span><span class="record-status">' + esc(status) + '</span>' + viewAction + pdfAction + actions + '</article>';
+  return '<article class="record-row"><span class="record-symbol" aria-hidden="true">' + module.icon + '</span><span class="record-info"><strong>' + esc(titleFor(record)) + '</strong><small>' + esc(detail) + '</small></span><span class="record-status">' + esc(status) + '</span>' + viewAction + pdfAction + actions + manageActions + '</article>';
 }
 function emptyState(message) { return '<div class="empty-state">' + esc(message) + '</div>'; }
 async function refreshLists() {
   if (!state.db || !state.user) return;
-  let records = (await getRecords()).filter(recordHasLotAccess).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const localRecords = await getRecords();
+  let records = localRecords.filter(record =>
+    record.syncStatus !== 'delete-pending' && recordHasLotAccess(record)
+  ).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   if (!['admin', 'supervisor'].includes(state.user.role)) records = records.filter(record => record.ownerUsername === state.user.username);
   const pending = records.filter(record => record.syncStatus === 'pending');
-  $('#pending-badge').textContent = pending.length;
+  const queuedDeletions = localRecords.filter(record =>
+    record.syncStatus === 'delete-pending' &&
+    (record.ownerUsername === state.user.username || isActiveAdmin())
+  );
+  $('#pending-badge').textContent = pending.length + queuedDeletions.length;
+  const deleteNote = $('#pending-delete-note');
+  if (deleteNote) {
+    deleteNote.hidden = !queuedDeletions.length;
+    $('#pending-delete-count').textContent = String(queuedDeletions.length);
+  }
   $('#record-total').textContent = records.length + (records.length === 1 ? ' registro' : ' registros');
-  $('#recent-list').innerHTML = records.slice(0, 4).map(recordRow).join('') || emptyState('Todavía no hay capturas de esta cuenta en el dispositivo.');
-  $('#pending-list').innerHTML = pending.map(recordRow).join('') || emptyState('No hay capturas pendientes.');
+  $('#recent-list').innerHTML = records.slice(0, 4).map(record => recordRow(record)).join('') || emptyState('Todavía no hay capturas de esta cuenta en el dispositivo.');
+  $('#pending-list').innerHTML = pending.map(record => recordRow(record)).join('') || emptyState('No hay capturas pendientes.');
   const query = ($('#record-search').value || '').trim().toLocaleLowerCase('es');
   const filtered = records.filter(record => !query || JSON.stringify(record).toLocaleLowerCase('es').includes(query));
-  $('#all-records').innerHTML = filtered.map(recordRow).join('') || emptyState(records.length ? 'No hay coincidencias.' : 'Todavía no hay capturas de esta cuenta en el dispositivo.');
+  $('#all-records').innerHTML = filtered.map(record => recordRow(record)).join('') || emptyState(records.length ? 'No hay coincidencias.' : 'Todavía no hay capturas de esta cuenta en el dispositivo.');
+  const manageable = records.filter(canManageRecord);
+  const manageQuery = ($('#manage-record-search').value || '').trim().toLocaleLowerCase('es');
+  const managedFiltered = manageable.filter(record => !manageQuery || JSON.stringify(record).toLocaleLowerCase('es').includes(manageQuery));
+  $('#manage-record-total').textContent = manageable.length + (manageable.length === 1 ? ' captura' : ' capturas');
+  $('#manage-record-list').innerHTML = managedFiltered.map(record => recordRow(record, true)).join('') ||
+    emptyState(manageable.length ? 'No hay coincidencias.' : 'No hay capturas disponibles para administrar.');
 }
 function toast(message) {
   const node = $('#toast');
@@ -1725,6 +1959,13 @@ function recordHasLotAccess(record) {
   visit(record.datos);
   return lotCodes.every(userCanAccessLot) && zones.every(userCanAccessZone);
 }
+function canManageRecordForUser(record, user, hasLotAccess) {
+  if (!record || !user || user.status !== 'active' || !hasLotAccess) return false;
+  return user.role === 'admin' || (record.ownerUsername && record.ownerUsername === user.username);
+}
+function canManageRecord(record) {
+  return canManageRecordForUser(record, state.user, recordHasLotAccess(record));
+}
 function renderHome() {
   renderGroups($('#module-groups'));
   renderGroups($('#module-picker'));
@@ -1745,17 +1986,35 @@ function navigate(page) {
   if (!state.user) return;
   if (page === 'usuarios' && !isActiveAdmin()) { toast('Solo una cuenta administradora activa puede gestionar usuarios.'); return; }
   if (state.recordTimeTimer) { clearInterval(state.recordTimeTimer); state.recordTimeTimer = null; }
+  if (page !== 'capturar' && state.editingRecord) {
+    state.editingRecord = null;
+    state.currentModule = null;
+    $('#capture-form').reset();
+    $('#form-fields').innerHTML = '';
+    $('#capture-form').hidden = true;
+    $('#module-picker').hidden = false;
+    $('#capture-submit').textContent = 'Guardar captura';
+  }
   $$('.page').forEach(section => { section.hidden = section.id !== 'page-' + page; });
-  $$('.nav-item,.mobile-nav button').forEach(button => button.classList.toggle('active', button.dataset.page === page));
+  $$('.nav-item,.mobile-nav button').forEach(button => {
+    const active = button.dataset.page === page ||
+      (page === 'gestionar' && button.closest('.mobile-nav') && button.dataset.page === 'registros');
+    button.classList.toggle('active', !!active);
+  });
   if (page === 'capturar') {
+    state.editingRecord = null;
+    $('#capture-form').reset();
+    $('#form-fields').innerHTML = '';
     state.currentModule = null;
     $('#capture-form').hidden = true;
     $('#module-picker').hidden = false;
+    $('#capture-submit').textContent = 'Guardar captura';
+    $('#capture-eyebrow').textContent = 'NUEVA CAPTURA';
     $('#form-title').textContent = 'Selecciona una actividad';
     $('#form-subtitle').textContent = 'Elige un apartado disponible para tu perfil.';
     renderGroups($('#module-picker'));
   }
-  if (page === 'pendientes' || page === 'registros' || page === 'inicio') refreshLists();
+  if (page === 'pendientes' || page === 'registros' || page === 'gestionar' || page === 'inicio') refreshLists();
   if (page === 'usuarios') refreshUsers().catch(handleCloudError);
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -1821,9 +2080,11 @@ async function endSession() {
   localStorage.removeItem(INVITE_PENDING_KEY);
   state.syncConnected = false;
   state.currentModule = null;
+  state.editingRecord = null;
   if (state.recordTimeTimer) { clearInterval(state.recordTimeTimer); state.recordTimeTimer = null; }
   $('#capture-form').reset();
   $('#form-fields').innerHTML = '';
+  $('#capture-submit').textContent = 'Guardar captura';
   showAuthScreen('login');
 }
 document.addEventListener('click', event => {
@@ -1842,6 +2103,22 @@ document.addEventListener('click', event => {
     generateEppPdf(eppPdfButton.dataset.eppPdf).catch(error => {
       console.error(error);
       toast('No se pudo generar el PDF de la captura EPP.');
+    });
+    return;
+  }
+  const editRecordButton = event.target.closest('[data-edit-record]');
+  if (editRecordButton) {
+    editCapture(editRecordButton.dataset.editRecord).catch(error => {
+      console.error(error);
+      toast('No se pudo abrir la captura guardada en este dispositivo.');
+    });
+    return;
+  }
+  const deleteRecordButton = event.target.closest('[data-delete-record]');
+  if (deleteRecordButton) {
+    deleteCapture(deleteRecordButton.dataset.deleteRecord).catch(error => {
+      console.error(error);
+      toast('No se pudo actualizar la captura guardada en este dispositivo.');
     });
     return;
   }
@@ -1914,6 +2191,11 @@ $('#capture-form').addEventListener('submit', async event => {
   event.preventDefault();
   const form = event.currentTarget;
   if (!form.reportValidity()) return;
+  const editing = state.editingRecord;
+  if (editing && editing.syncStatus === 'synced' && !navigator.onLine) {
+    toast('Conéctate a internet para guardar cambios de una captura sincronizada.');
+    return;
+  }
   const lotLookupResult = await updateLotLocations(form, true);
   if (lotLookupResult === null) {
     toast('No se pudo comprobar la disponibilidad de los lotes. Verifica tu conexión e inténtalo de nuevo.');
@@ -1925,22 +2207,50 @@ $('#capture-form').addEventListener('submit', async event => {
     return;
   }
   if (state.currentModule === 'clima' && !$$('.repeat-row', $('#weather-rows')).length) { toast('Agrega por lo menos una lectura de clima.'); return; }
-  const createdAt = new Date().toISOString();
-  const recordId = crypto.randomUUID();
+  const createdAt = editing ? editing.createdAt : new Date().toISOString();
+  const recordId = editing ? editing.id : crypto.randomUUID();
   let datos;
-  try { datos = await serializeForm(form, recordId); }
+  try { datos = await serializeForm(form, recordId, editing && editing.datos); }
   catch (error) { console.error(error); toast('No se pudo leer una imagen adjunta.'); return; }
-  datos.hora_registro = localTime();
-  const record = {
-    id: recordId, tipo: state.currentModule, createdAt, schemaVersion: 5, syncStatus: 'pending',
-    syncOrigin: 'new', ownerUsername: state.user.username, ownerName: state.user.displayName, ownerRole: state.user.role, datos: datos
-  };
+  if (!editing) datos.hora_registro = localTime();
+  const record = editing
+    ? {
+      ...editing, id: recordId, tipo: state.currentModule, createdAt, schemaVersion: 5,
+      syncStatus: editing.syncStatus === 'synced' ? 'synced' : 'pending', datos
+    }
+    : {
+      id: recordId, tipo: state.currentModule, createdAt, schemaVersion: 5, syncStatus: 'pending',
+      syncOrigin: 'new', ownerUsername: state.user.username, ownerName: state.user.displayName, ownerRole: state.user.role, datos
+    };
+  if (editing) {
+    record.reviewStatus = 'pending';
+    record.reviewedBy = null;
+    record.reviewedAt = null;
+    record.reviewNote = null;
+  }
+  if (editing && editing.syncStatus === 'synced') {
+    try {
+      await cloudRequest('rpc/update_field_record', {
+        method: 'POST',
+        body: { p_record_id: recordId, p_schema_version: 5, p_datos: datos }
+      });
+    } catch (error) {
+      handleCloudError(error);
+      return;
+    }
+  }
   try {
     await putRecord(record);
     await refreshLists();
     form.reset();
-    toast('Guardado en este dispositivo.');
-    navigate('inicio');
+    $('#form-fields').innerHTML = '';
+    $('#capture-submit').textContent = 'Guardar captura';
+    state.editingRecord = null;
+    state.currentModule = null;
+    toast(editing
+      ? editing.syncStatus === 'synced' ? 'Cambios guardados; la captura volvió a revisión pendiente.' : 'Cambios guardados en este dispositivo.'
+      : 'Guardado en este dispositivo.');
+    navigate(editing ? 'gestionar' : 'inicio');
     if (navigator.onLine) syncCloudRecords(false).catch(handleCloudError);
   } catch (error) {
     console.error(error);
@@ -2171,6 +2481,7 @@ $('#check-access').addEventListener('click', async () => {
 });
 $('#pending-logout').addEventListener('click', endSession);
 $('#record-search').addEventListener('input', refreshLists);
+$('#manage-record-search').addEventListener('input', refreshLists);
 $('#open-visit-map').addEventListener('click', openVisitMap);
 $('#visit-map-stage').addEventListener('click', event => {
   const lot = event.target.closest('[data-visit-lot]');
@@ -2184,19 +2495,21 @@ $('#visit-map-stage').addEventListener('keydown', event => {
   selectVisitMapLot(lot.dataset.visitLot);
 });
 function visibleLocalRecords(records) {
-  const scoped = records.filter(recordHasLotAccess);
+  const scoped = records.filter(record => record.syncStatus !== 'delete-pending' && recordHasLotAccess(record));
   return ['admin', 'supervisor'].includes(state.user.role) ? scoped : scoped.filter(record => record.ownerUsername === state.user.username);
 }
 $('#import-local').addEventListener('click', async () => {
   try {
     const result = await syncCloudRecords(true);
-    toast(result.uploaded + ' registros locales importados; ' + result.downloaded + ' registros compartidos actualizados.');
+    const deleted = result.deleted ? result.deleted + (result.deleted === 1 ? ' eliminación sincronizada; ' : ' eliminaciones sincronizadas; ') : '';
+    toast(result.uploaded + ' registros locales importados; ' + deleted + result.downloaded + ' registros compartidos actualizados.');
   } catch (error) { handleCloudError(error); }
 });
 $('#sync-now').addEventListener('click', async () => {
   try {
     const result = await syncCloudRecords(false);
-    toast(result.uploaded + ' capturas nuevas sincronizadas; ' + result.downloaded + ' registros compartidos actualizados.');
+    const deleted = result.deleted ? result.deleted + (result.deleted === 1 ? ' eliminación sincronizada; ' : ' eliminaciones sincronizadas; ') : '';
+    toast(result.uploaded + ' capturas nuevas sincronizadas; ' + deleted + result.downloaded + ' registros compartidos actualizados.');
   } catch (error) { handleCloudError(error); }
 });
 $('#export-all').addEventListener('click', async () => downloadJson(visibleLocalRecords(await getRecords()), 'mym-campo-' + localDate() + '.json'));

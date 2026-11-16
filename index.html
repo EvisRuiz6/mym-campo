@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#174b38">
   <meta name="description" content="Captura de labores aéreas y terrestres para MyM Data">
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="app.css?v=19">
+  <link rel="stylesheet" href="app.css?v=20">
   <title>MyM Campo</title>
 </head>
 <body>
@@ -95,6 +95,7 @@
         <button class="nav-item" data-page="capturar"><span class="nav-icon">＋</span> Capturar datos</button>
         <button class="nav-item" data-page="pendientes"><span class="nav-icon">◷</span> Pendientes <b id="pending-badge" class="nav-count">0</b></button>
         <button class="nav-item" data-page="registros"><span class="nav-icon">▤</span> Registros del dispositivo</button>
+        <button class="nav-item" data-page="gestionar"><span class="nav-icon">✎</span> Administrar capturas</button>
         <button class="nav-item admin-nav" data-page="usuarios" hidden><span class="nav-icon">♙</span> Usuarios</button>
         <div class="side-note"><span class="sync-dot"></span><div><strong>Captura y sincronización</strong><small>Las capturas sin conexión quedan en cola y se envían al recuperar conexión.</small></div></div>
       </aside>
@@ -113,11 +114,11 @@
 
         <section id="page-capturar" class="page" hidden>
           <button class="back-link" data-goto="inicio" type="button">← Inicio</button>
-          <p class="eyebrow">NUEVA CAPTURA</p><h1 id="form-title">Selecciona una actividad</h1><p id="form-subtitle" class="subtitle">Elige un apartado de tu perfil.</p>
+          <p id="capture-eyebrow" class="eyebrow">NUEVA CAPTURA</p><h1 id="form-title">Selecciona una actividad</h1><p id="form-subtitle" class="subtitle">Elige un apartado de tu perfil.</p>
           <div id="module-picker" class="picker-groups"></div>
           <form id="capture-form" class="capture-form" hidden novalidate>
             <div id="form-fields"></div>
-            <div class="form-actions"><button class="secondary-button" data-goto="inicio" type="button">Cancelar</button><button class="primary-button" type="submit">Guardar captura</button></div>
+            <div class="form-actions"><button class="secondary-button" data-goto="inicio" type="button">Cancelar</button><button id="capture-submit" class="primary-button" type="submit">Guardar captura</button></div>
             <p class="form-footnote">Se guarda primero en el dispositivo y se sincroniza cuando hay conexión.</p>
           </form>
         </section>
@@ -125,6 +126,7 @@
         <section id="page-pendientes" class="page" hidden>
           <p class="eyebrow">SINCRONIZACIÓN</p><h1>Pendientes</h1><p class="subtitle">Registros que todavía no se han enviado a una fuente compartida.</p>
           <div class="status-strip warning-strip"><span class="status-check">!</span><div><strong>Capturas pendientes de sincronización</strong><small>Las capturas nuevas se envían al recuperar conexión. Importa de forma explícita los registros locales anteriores de tu propia cuenta.</small></div></div>
+          <div id="pending-delete-note" class="status-strip warning-strip" hidden><span class="status-check">!</span><div><strong><span id="pending-delete-count">0</span> eliminaciones pendientes</strong><small>Se completarán en Supabase al recuperar la conexión.</small></div></div>
           <div id="pending-list" class="record-list"></div>
           <button id="sync-now" class="secondary-button" type="button">Sincronizar pendientes</button>
           <button id="import-local" class="secondary-button" type="button">Importar registros locales de esta cuenta</button>
@@ -134,8 +136,17 @@
         <section id="page-registros" class="page" hidden>
           <p class="eyebrow">REGISTROS COMPARTIDOS</p><h1>Registros</h1><p class="subtitle">Cada usuario ve sus capturas; supervisores y administradores pueden revisar las del equipo.</p>
           <p class="record-query-hint">Selecciona “Ver datos” para consultar la información completa de una captura guardada o sincronizada.</p>
-          <div class="record-toolbar"><label class="search-field">⌕ <input id="record-search" type="search" placeholder="Buscar por finca, actividad o responsable" aria-label="Buscar registros"></label><button id="open-visit-map" class="secondary-button" type="button" hidden>Mapa de muestreos</button><button id="export-all" class="secondary-button" type="button">Exportar JSON</button></div>
+          <div class="record-toolbar"><label class="search-field">⌕ <input id="record-search" type="search" placeholder="Buscar por finca, actividad o responsable" aria-label="Buscar registros"></label><button class="secondary-button" data-goto="gestionar" type="button">Administrar capturas</button><button id="open-visit-map" class="secondary-button" type="button" hidden>Mapa de muestreos</button><button id="export-all" class="secondary-button" type="button">Exportar JSON</button></div>
           <div id="all-records" class="record-list"></div>
+        </section>
+
+        <section id="page-gestionar" class="page" hidden>
+          <button class="back-link" data-goto="registros" type="button">← Registros</button>
+          <p class="eyebrow">GESTIÓN DE CAPTURAS</p><h1>Administrar capturas</h1>
+          <p class="subtitle">Edita o elimina tus capturas. Las personas administradoras pueden gestionar todas; los supervisores conservan la revisión de capturas ajenas.</p>
+          <p class="record-query-hint">Los cambios de registros sincronizados requieren conexión. Las capturas que siguen en cola pueden editarse o eliminarse sin conexión; editar una captura revisada la devuelve a revisión pendiente.</p>
+          <div class="record-toolbar"><label class="search-field">⌕ <input id="manage-record-search" type="search" placeholder="Buscar por finca, actividad o responsable" aria-label="Buscar capturas para administrar"></label><span id="manage-record-total" class="muted-inline">0 capturas</span></div>
+          <div id="manage-record-list" class="record-list"></div>
         </section>
 
         <section id="page-usuarios" class="page" hidden>
@@ -215,6 +226,6 @@
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </div>
   <script src="config.js"></script>
-  <script src="app.js?v=34"></script>
+  <script src="app.js?v=35"></script>
 </body>
 </html>

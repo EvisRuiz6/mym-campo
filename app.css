@@ -93,6 +93,9 @@ button { -webkit-tap-highlight-color: transparent; }
 .record-status { font-size: 10px; color: #8a691c; background: #f8f1dd; border-radius: 5px; padding: 5px 7px; }
 .record-view-button { min-height: 32px; border: 1px solid #d7e0d9; border-radius: 7px; background: #fff; color: var(--forest); padding: 5px 10px; font-size: 11px; cursor: pointer; white-space: nowrap; }
 .record-view-button:hover { background: #f1f7f1; border-color: #97b69e; }
+.record-manage-actions { display: flex; gap: 7px; }
+.record-delete-button { min-height: 32px; border: 1px solid #e6c6c1; border-radius: 7px; background: #fff; color: #8b3328; padding: 5px 10px; font-size: 11px; cursor: pointer; white-space: nowrap; }
+.record-delete-button:hover { background: #fff4f2; border-color: #d79a91; }
 .empty-state { padding: 28px 16px; text-align: center; color: var(--muted); font-size: 13px; border: 1px dashed #d5ded7; border-radius: 10px; }
 .page h1 { margin-bottom: 6px; }
 .back-link { margin: 0 0 24px; }
@@ -221,6 +224,8 @@ dialog::backdrop { background: #17241c88; }
   .record-row { flex-wrap: wrap; }
   .record-info { flex: 1 1 180px; }
   .record-view-button { margin-left: auto; }
+  .record-manage-actions { margin-left: auto; }
+  .record-manage-actions .record-view-button { margin-left: 0; }
   .record-detail-dialog { width: calc(100% - 20px); max-height: calc(100dvh - 32px); }
   .record-detail-card { padding: 17px; }
   .record-detail-grid { grid-template-columns: 1fr; }

@@ -65,6 +65,8 @@ El formulario muestra la dosis objetivo de la labor, los litros por hectárea ap
 
 `Control de malezas` se conserva como opción por compatibilidad, pero no tiene dosis configurada, por lo que su variación aparece como `—`.
 
+Desde el formulario de Vuelos, **Resumen y PDF acumulado** abre una consulta local con filtros inclusivos por fecha, finca, zona y labor. La tabla siempre muestra T40-1, T50-1 a T50-4 y T100-1 a T100-4; también agrega cualquier otro dron guardado y vuelos sin dron identificado para que los totales incluyan todas las capturas coincidentes. El PDF de impresión aplica los mismos filtros y presenta los criterios seleccionados, vuelos, hectáreas y litros por dron. Capturas sin hectáreas o litros válidos se señalan y sus valores no se suman.
+
 ## Mapa de lotes muestreados
 
 El botón **Mapa de muestreos** aparece para supervisores y administradores en **Registros**. Muestra los límites UTM 15N; los lotes sin muestreo aparecen en gris y los visitados se colorean por el % CONTROL del muestreo más reciente (menos de 25%, 25 a menos de 50%, 50 a menos de 75% y 75-100%). Al seleccionar un lote se consultan su último porcentaje, fecha, número de visitas y responsables; los muestreos sin porcentaje se identifican aparte. El mapa es vectorial, sin mapa base externo. Las geometrías no se publican en GitHub Pages: la aplicación las consulta desde `field_lot_boundaries`, cuyas políticas RLS aplican las zonas autorizadas.

@@ -213,7 +213,7 @@ const childSchemas = {
 };
 const $ = (selector, root) => (root || document).querySelector(selector);
 const $$ = (selector, root) => [...(root || document).querySelectorAll(selector)];
-const state = { db: null, user: null, authSession: null, configured: false, syncConnected: false, syncBusy: false, refreshPromise: null, currentModule: null, editingRecord: null, recordTimeTimer: null, lotLookup: Object.create(null), lotLookupRequests: new Map(), zoneOptions: [], visitMap: null, acceptingInvite: false, lotFollowupPlans: [], lotFollowupVisits: [], lotFollowupLoadPromise: null, lotFollowupDateId: 0, editingLotFollowup: null };
+const state = { db: null, user: null, authSession: null, configured: false, syncConnected: false, syncBusy: false, refreshPromise: null, currentModule: null, editingRecord: null, recordTimeTimer: null, lotLookup: Object.create(null), lotLookupRequests: new Map(), zoneOptions: [], visitMap: null, flightReportRecords: [], acceptingInvite: false, lotFollowupPlans: [], lotFollowupVisits: [], lotFollowupLoadPromise: null, lotFollowupDateId: 0, editingLotFollowup: null };
 
 function lotLookupCacheKey() {
   const scopeKey = [state.user.role, ...(state.user.allowedZones || []).slice().sort()].join(':');
@@ -788,6 +788,164 @@ function formatFlightVariationPercent(value) {
   if (!Number.isFinite(value)) return '—';
   return (value > 0 ? '+' : '') + value.toFixed(1) + '%';
 }
+const FLIGHT_REPORT_DRONES = [
+  'T40-1',
+  'T50-1', 'T50-2', 'T50-3', 'T50-4',
+  'T100-1', 'T100-2', 'T100-3', 'T100-4'
+];
+const FLIGHT_REPORT_MISSING_FILTER = '__sin_dato__';
+const flightReportFieldAliases = Object.freeze({
+  fecha: ['fecha', 'FECHA'],
+  finca: ['finca', 'FINCA'],
+  zona: ['zona', 'ZONA', 'zone', 'ZONE'],
+  labor: ['labor', 'LABOR'],
+  dron: ['dron', 'DRON'],
+  area_ha: ['area_ha', 'AREA_HA'],
+  litros: ['litros', 'LITROS']
+});
+function flightReportValue(record, field) {
+  const data = record && record.datos && typeof record.datos === 'object' && !Array.isArray(record.datos)
+    ? record.datos
+    : {};
+  for (const key of flightReportFieldAliases[field] || []) {
+    const value = data[key];
+    if ((typeof value === 'string' || typeof value === 'number') && String(value).trim() !== '') return String(value).trim();
+  }
+  return '';
+}
+function flightReportDate(value) {
+  const date = String(value || '').trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return '';
+  const time = Date.parse(date + 'T00:00:00Z');
+  return Number.isFinite(time) && new Date(time).toISOString().slice(0, 10) === date ? date : '';
+}
+function flightReportNormalize(value) {
+  return String(value || '').trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es');
+}
+function flightReportFilterOptions(records, field) {
+  const values = new Map();
+  let hasMissing = false;
+  for (const record of records) {
+    if (!record || record.tipo !== 'vuelos') continue;
+    const value = flightReportValue(record, field);
+    if (!value) {
+      hasMissing = true;
+      continue;
+    }
+    const normalized = flightReportNormalize(value);
+    if (!values.has(normalized)) values.set(normalized, value);
+  }
+  const options = [...values.values()]
+    .sort((a, b) => a.localeCompare(b, 'es'))
+    .map(value => ({ value, label: value }));
+  if (hasMissing) {
+    const label = field === 'finca' ? 'Sin finca' : field === 'zona' ? 'Sin zona' : 'Sin labor';
+    options.push({ value: FLIGHT_REPORT_MISSING_FILTER, label });
+  }
+  return options;
+}
+function flightReportData(records, filters) {
+  const selected = filters || {};
+  const fromValue = String(selected.from || '').trim();
+  const toValue = String(selected.to || '').trim();
+  const from = fromValue ? flightReportDate(fromValue) : '';
+  const to = toValue ? flightReportDate(toValue) : '';
+  const invalidDateRange = (fromValue && !from) || (toValue && !to) || (from && to && from > to);
+  const sourceRecords = (Array.isArray(records) ? records : []).filter(record => record && record.tipo === 'vuelos');
+  const groups = new Map(FLIGHT_REPORT_DRONES.map(drone => [drone, {
+    drone, flights: 0, hectares: 0, liters: 0, incompleteFlights: 0
+  }]));
+  const totals = {
+    flights: 0,
+    hectares: 0,
+    liters: 0,
+    incompleteFlights: 0,
+    invalidAreaRecords: 0,
+    invalidLitersRecords: 0,
+    missingDateIncluded: 0,
+    missingDateExcluded: 0
+  };
+  if (!invalidDateRange) {
+    for (const record of sourceRecords) {
+      const finca = flightReportValue(record, 'finca');
+      const zona = flightReportValue(record, 'zona');
+      const labor = flightReportValue(record, 'labor');
+      const matchesFilter = (value, filter) => !filter ||
+        (filter === FLIGHT_REPORT_MISSING_FILTER
+          ? !value
+          : flightReportNormalize(value) === flightReportNormalize(filter));
+      if (!matchesFilter(finca, selected.finca) ||
+          !matchesFilter(zona, selected.zona) ||
+          !matchesFilter(labor, selected.labor)) continue;
+
+      const date = flightReportDate(flightReportValue(record, 'fecha'));
+      if (from || to) {
+        if (!date) {
+          totals.missingDateExcluded += 1;
+          continue;
+        }
+        if ((from && date < from) || (to && date > to)) continue;
+      } else if (!date) {
+        totals.missingDateIncluded += 1;
+      }
+
+      const drone = flightReportValue(record, 'dron') || 'Sin identificar';
+      if (!groups.has(drone)) {
+        groups.set(drone, { drone, flights: 0, hectares: 0, liters: 0, incompleteFlights: 0 });
+      }
+      const group = groups.get(drone);
+      const area = flightNumber(flightReportValue(record, 'area_ha'));
+      const liters = flightNumber(flightReportValue(record, 'litros'));
+      let validArea = area !== null && area >= 0;
+      let validLiters = liters !== null && liters >= 0;
+
+      group.flights += 1;
+      totals.flights += 1;
+      if (validArea) {
+        const groupTotal = group.hectares + area;
+        const reportTotal = totals.hectares + area;
+        if (Number.isFinite(groupTotal) && Number.isFinite(reportTotal)) {
+          group.hectares = groupTotal;
+          totals.hectares = reportTotal;
+        } else {
+          validArea = false;
+        }
+      }
+      if (!validArea) totals.invalidAreaRecords += 1;
+      if (validLiters) {
+        const groupTotal = group.liters + liters;
+        const reportTotal = totals.liters + liters;
+        if (Number.isFinite(groupTotal) && Number.isFinite(reportTotal)) {
+          group.liters = groupTotal;
+          totals.liters = reportTotal;
+        } else {
+          validLiters = false;
+        }
+      }
+      if (!validLiters) totals.invalidLitersRecords += 1;
+      if (!validArea || !validLiters) {
+        group.incompleteFlights += 1;
+        totals.incompleteFlights += 1;
+      }
+    }
+  }
+  const otherDrones = [...groups.keys()]
+    .filter(drone => !FLIGHT_REPORT_DRONES.includes(drone) && drone !== 'Sin identificar')
+    .sort((a, b) => a.localeCompare(b, 'es'));
+  const orderedDrones = [...FLIGHT_REPORT_DRONES, ...otherDrones];
+  if (groups.has('Sin identificar')) orderedDrones.push('Sin identificar');
+  return {
+    invalidDateRange: !!invalidDateRange,
+    sourceRecordCount: sourceRecords.length,
+    rows: orderedDrones.map(drone => groups.get(drone)),
+    totals
+  };
+}
+function formatFlightReportNumber(value) {
+  return Number.isFinite(value)
+    ? value.toLocaleString('es-GT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : '—';
+}
 function flightFields() {
   const laborOptions = Object.keys(flightLitersPerHaByLabor);
   laborOptions.push({ value: 'Control de malezas', label: 'Control de malezas (sin dosis configurada)' });
@@ -798,7 +956,8 @@ function flightFields() {
   if (legacyLabor && !hasLegacyLaborOption) {
     laborOptions.unshift({ value: legacyLabor, label: legacyLabor + ' (sin dosis configurada)' });
   }
-  return commonFields() + '<section class="form-section"><h2>Datos del vuelo</h2><div class="field-grid">' +
+  return '<section class="form-section flight-report-launch"><div><h2>Consulta de vuelos cargados</h2><p class="field-hint">Filtra las capturas por fechas, finca, zona y labor; consulta los totales o imprime un PDF acumulado.</p></div><button id="open-flight-report" class="secondary-button" data-open-flight-report type="button">Resumen y PDF acumulado</button></section>' +
+    commonFields() + '<section class="form-section"><h2>Datos del vuelo</h2><div class="field-grid">' +
     fieldMarkup({ label: 'Labor', name: 'labor', type: 'select', required: true, options: laborOptions }, 'f-labor', true) +
     fieldMarkup({ label: 'Dron', name: 'dron', placeholder: 'Identificador del dron' }, 'f-drone', true) +
     fieldMarkup({ label: 'Área aplicada (ha)', name: 'area_ha', type: 'number', min: '0.01', step: '0.01', required: true }, 'f-area', true) +
@@ -1672,6 +1831,217 @@ async function generateMalezasPdf(recordId) {
     printWindow.close();
     throw error;
   }
+}
+function currentFlightReportFilters() {
+  return {
+    from: $('#flight-report-from').value,
+    to: $('#flight-report-to').value,
+    finca: $('#flight-report-finca').value,
+    zona: $('#flight-report-zona').value,
+    labor: $('#flight-report-labor').value
+  };
+}
+function flightReportFilterLabel(field, value) {
+  if (!value) {
+    return field === 'finca' ? 'Todas las fincas' :
+      field === 'zona' ? 'Todas las zonas' :
+        field === 'labor' ? 'Todas las labores' : 'Sin filtro';
+  }
+  if (value === FLIGHT_REPORT_MISSING_FILTER) {
+    return field === 'finca' ? 'Sin finca' : field === 'zona' ? 'Sin zona' : 'Sin labor';
+  }
+  return value;
+}
+function flightReportNotes(report) {
+  const notes = [];
+  if (report.totals.invalidAreaRecords) {
+    notes.push(report.totals.invalidAreaRecords + ' captura(s) tienen hectáreas vacías, no válidas o fuera del rango numérico; esos valores no se sumaron.');
+  }
+  if (report.totals.invalidLitersRecords) {
+    notes.push(report.totals.invalidLitersRecords + ' captura(s) tienen litros vacíos, no válidos o fuera del rango numérico; esos valores no se sumaron.');
+  }
+  if (report.totals.missingDateIncluded) {
+    notes.push(report.totals.missingDateIncluded + ' captura(s) sin fecha válida se incluyen porque no se aplicó un rango de fechas.');
+  }
+  if (report.totals.missingDateExcluded) {
+    notes.push(report.totals.missingDateExcluded + ' captura(s) sin fecha válida se excluyeron porque se aplicó un rango de fechas.');
+  }
+  return notes;
+}
+function flightReportDocument(report, filters) {
+  if (report.invalidDateRange) throw new Error('La fecha inicial debe ser anterior o igual a la fecha final.');
+  const dateRange = (filters.from ? formatDate(filters.from) : 'Sin límite inicial') +
+    ' – ' + (filters.to ? formatDate(filters.to) : 'Sin límite final');
+  const criteria = [
+    ['Rango de fechas', dateRange],
+    ['Finca', flightReportFilterLabel('finca', filters.finca)],
+    ['Zona', flightReportFilterLabel('zona', filters.zona)],
+    ['Labor', flightReportFilterLabel('labor', filters.labor)]
+  ].map(([label, value]) => '<div class="flight-report-meta"><strong>' + esc(label) +
+    ':</strong><span>' + esc(value) + '</span></div>').join('');
+  const rows = report.rows.map(row => '<tr><th scope="row">' + esc(row.drone) +
+    '</th><td>' + row.flights + '</td><td>' + formatFlightReportNumber(row.hectares) +
+    '</td><td>' + formatFlightReportNumber(row.liters) + '</td></tr>').join('');
+  const notes = flightReportNotes(report);
+  const noteMarkup = '<p class="flight-report-note">Se incluyen capturas sincronizadas y pendientes disponibles en este dispositivo.' +
+    (notes.length ? ' ' + notes.map(esc).join(' ') : '') + '</p>';
+  const filename = 'Vuelos-acumulado-' + localDate() +
+    (filters.labor && filters.labor !== FLIGHT_REPORT_MISSING_FILTER ? '-' + slug(filters.labor) : '');
+  const styles = `
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #182720; font-family: Arial, Helvetica, sans-serif; font-size: 10px; line-height: 1.45; }
+    .flight-report { width: 100%; margin: 0 auto; }
+    .flight-report-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; margin: 0 0 12px; padding: 1px 0 9px; border-bottom: 2px solid #174b38; }
+    .flight-report-title { margin: 0; color: #182720; font-size: 19px; font-weight: 700; }
+    .flight-report-period { margin: 3px 0 0; color: #718078; font-size: 8px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+    .flight-report-brand { padding-top: 2px; color: #174b38; font-size: 8px; font-weight: 800; letter-spacing: .14em; line-height: 1.2; text-align: right; }
+    .flight-report-meta-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; margin: 0 0 14px; }
+    .flight-report-meta { display: flex; gap: 7px; min-width: 0; border-bottom: 1px solid #e4eae5; padding: 6px 2px; }
+    .flight-report-meta strong { color: #718078; font-size: 8px; letter-spacing: .03em; text-transform: uppercase; white-space: nowrap; }
+    .flight-report-meta span { overflow-wrap: anywhere; }
+    .flight-report-summary { display: flex; gap: 14px; margin: 0 0 12px; border-left: 3px solid #174b38; padding: 9px 12px; background: #f2f6f3; color: #174b38; font-size: 12px; font-weight: 700; }
+    .flight-report-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 10px; }
+    .flight-report-table th, .flight-report-table td { border-bottom: 1px solid #dce5de; padding: 7px 8px; text-align: right; font-variant-numeric: tabular-nums; }
+    .flight-report-table thead th { border-bottom: 1.5px solid #174b38; background: #f2f6f3; color: #405448; text-align: right; font-size: 8px; letter-spacing: .04em; text-transform: uppercase; }
+    .flight-report-table th:first-child, .flight-report-table td:first-child { text-align: left; }
+    .flight-report-table tbody tr:nth-child(even) { background: #f8faf8; }
+    .flight-report-table tfoot th, .flight-report-table tfoot td { border-top: 1.5px solid #174b38; border-bottom: 0; color: #174b38; font-weight: 700; }
+    .flight-report-note { margin: 10px 0 0; border-top: 1px solid #e4eae5; padding-top: 7px; color: #718078; font-size: 8px; line-height: 1.5; }
+    @page { size: letter portrait; margin: 12mm; }
+    @media print {
+      body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+      .flight-report-header, .flight-report-summary { break-after: avoid-page; }
+      .flight-report-table thead { display: table-header-group; }
+      .flight-report-table tr { break-inside: avoid; page-break-inside: avoid; }
+    }
+  `;
+  return '<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>' +
+    esc(filename) + '</title><style>' + styles + '</style></head><body><main class="flight-report">' +
+    '<header class="flight-report-header"><div><h1 class="flight-report-title">RESUMEN ACUMULADO DE VUELOS</h1><p class="flight-report-period">MyM Campo · Aplicaciones aéreas · Generado ' +
+    esc(formatDate(localDate())) + '</p></div><div class="flight-report-brand">MADRE<br>TIERRA</div></header>' +
+    '<section class="flight-report-meta-grid">' + criteria + '</section>' +
+    '<div class="flight-report-summary"><span>' + report.totals.flights + (report.totals.flights === 1 ? ' vuelo' : ' vuelos') +
+    '</span><span>' + formatFlightReportNumber(report.totals.hectares) + ' ha</span><span>' +
+    formatFlightReportNumber(report.totals.liters) + ' L</span></div>' +
+    '<table class="flight-report-table"><thead><tr><th scope="col">Dron</th><th scope="col">Vuelos</th><th scope="col">Hectáreas</th><th scope="col">Litros usados</th></tr></thead><tbody>' +
+    rows + '</tbody><tfoot><tr><th scope="row">Total</th><td>' + report.totals.flights +
+    '</td><td>' + formatFlightReportNumber(report.totals.hectares) + '</td><td>' +
+    formatFlightReportNumber(report.totals.liters) + '</td></tr></tfoot></table>' + noteMarkup +
+    '</main></body></html>';
+}
+function updateFlightReportFilterOptions() {
+  const controls = [
+    ['flight-report-finca', 'finca', 'Todas las fincas'],
+    ['flight-report-zona', 'zona', 'Todas las zonas'],
+    ['flight-report-labor', 'labor', 'Todas las labores']
+  ];
+  for (const [id, field, allLabel] of controls) {
+    const select = $('#' + id);
+    const previous = select.value;
+    const options = flightReportFilterOptions(state.flightReportRecords, field);
+    select.innerHTML = '<option value="">' + esc(allLabel) + '</option>' +
+      options.map(option => '<option value="' + esc(option.value) + '">' + esc(option.label) + '</option>').join('');
+    select.value = options.some(option => option.value === previous) ? previous : '';
+  }
+}
+function resetFlightReportView() {
+  state.flightReportRecords = [];
+  $('#flight-report-from').value = '';
+  $('#flight-report-to').value = '';
+  updateFlightReportFilterOptions();
+  renderFlightReport();
+}
+function renderFlightReport() {
+  const filters = currentFlightReportFilters();
+  const report = flightReportData(state.flightReportRecords, filters);
+  $('#flight-report-pdf').disabled = report.invalidDateRange;
+  $('#flight-report-rows').innerHTML = report.rows.map(row => '<tr><th scope="row">' + esc(row.drone) +
+    '</th><td>' + row.flights + '</td><td>' + formatFlightReportNumber(row.hectares) +
+    '</td><td>' + formatFlightReportNumber(row.liters) + '</td></tr>').join('');
+  $('#flight-report-totals').innerHTML = '<tr><th scope="row">Total</th><td>' + report.totals.flights +
+    '</td><td>' + formatFlightReportNumber(report.totals.hectares) + '</td><td>' +
+    formatFlightReportNumber(report.totals.liters) + '</td></tr>';
+  $('#flight-report-summary').textContent = report.totals.flights +
+    (report.totals.flights === 1 ? ' vuelo' : ' vuelos') + ' · ' +
+    formatFlightReportNumber(report.totals.hectares) + ' ha · ' +
+    formatFlightReportNumber(report.totals.liters) + ' L';
+  $('#flight-report-status').textContent = report.invalidDateRange
+    ? 'Revisa el rango de fechas: la fecha inicial debe ser anterior o igual a la fecha final.'
+    : report.totals.flights
+      ? 'Los totales corresponden a las capturas que cumplen con todos los filtros.'
+      : 'No hay capturas de Vuelos que coincidan con los filtros seleccionados.';
+  const notes = ['Se consultaron ' + report.sourceRecordCount + ' captura(s) de Vuelos disponibles en este dispositivo.'];
+  notes.push(...flightReportNotes(report));
+  $('#flight-report-data-note').textContent = notes.join(' ');
+}
+async function loadFlightReportRecords() {
+  const userId = state.user && state.user.id;
+  const refreshButton = $('#flight-report-refresh');
+  refreshButton.disabled = true;
+  $('#flight-report-status').textContent = 'Cargando capturas de Vuelos guardadas en este dispositivo…';
+  try {
+    const records = await getRecords();
+    if (!state.user || state.user.id !== userId || !userCanOpenModule('vuelos')) {
+      throw new Error('Tu perfil ya no tiene acceso al resumen de Vuelos.');
+    }
+    state.flightReportRecords = visibleLocalRecords(records).filter(record => record.tipo === 'vuelos');
+    updateFlightReportFilterOptions();
+    renderFlightReport();
+  } finally {
+    refreshButton.disabled = false;
+  }
+}
+async function openFlightReport() {
+  if (!state.user || !userCanOpenModule('vuelos')) {
+    toast('El resumen de Vuelos no está disponible para tu perfil.');
+    return;
+  }
+  const dialog = $('#flight-report-dialog');
+  if (typeof dialog.showModal !== 'function') {
+    toast('Este navegador no permite abrir el resumen de Vuelos.');
+    return;
+  }
+  if (!dialog.open) dialog.showModal();
+  try {
+    await loadFlightReportRecords();
+  } catch (error) {
+    $('#flight-report-status').textContent = error.message || 'No se pudieron cargar las capturas de Vuelos.';
+    throw error;
+  }
+}
+function generateFlightReportPdf() {
+  if (!state.user || !userCanOpenModule('vuelos')) {
+    toast('El resumen de Vuelos no está disponible para tu perfil.');
+    return;
+  }
+  const filters = currentFlightReportFilters();
+  const report = flightReportData(state.flightReportRecords, filters);
+  if (report.invalidDateRange) {
+    renderFlightReport();
+    return;
+  }
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) {
+    toast('Permite las ventanas emergentes para generar el PDF.');
+    return;
+  }
+  try {
+    printWindow.document.open();
+    printWindow.document.write(flightReportDocument(report, filters));
+    printWindow.document.close();
+    printWindow.focus();
+    window.setTimeout(() => {
+      if (!printWindow.closed) printWindow.print();
+    }, 350);
+  } catch (error) {
+    printWindow.close();
+    throw error;
+  }
+}
+function handleFlightReportError(error) {
+  console.error('No se pudo cargar el resumen de Vuelos.', error);
+  $('#flight-report-status').textContent = error.message || 'No se pudieron cargar las capturas de Vuelos.';
+  toast('No se pudo actualizar el resumen de Vuelos.');
 }
 function recordDetailLabel(key) {
   const label = String(key).replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').trim();
@@ -3078,9 +3448,13 @@ async function endSession() {
   state.authSession = null;
   state.user = null;
   state.visitMap = null;
+  state.flightReportRecords = [];
   clearLotFollowupData();
   const mapDialog = $('#visit-map-dialog');
   if (mapDialog.open) mapDialog.close();
+  const flightReportDialog = $('#flight-report-dialog');
+  if (flightReportDialog.open) flightReportDialog.close();
+  resetFlightReportView();
   $('#visit-map-stage').innerHTML = '';
   state.acceptingInvite = false;
   localStorage.removeItem(INVITE_PENDING_KEY);
@@ -3096,6 +3470,12 @@ async function endSession() {
 document.addEventListener('click', event => {
   const authMode = event.target.closest('[data-auth-mode]');
   if (authMode) { showAuthScreen(authMode.dataset.authMode); return; }
+  const flightReportButton = event.target.closest('[data-open-flight-report]');
+  if (flightReportButton) {
+    event.preventDefault();
+    openFlightReport().catch(handleFlightReportError);
+    return;
+  }
   const viewRecord = event.target.closest('[data-view-record]');
   if (viewRecord) {
     showRecordDetails(viewRecord.dataset.viewRecord).catch(error => {
@@ -3528,6 +3908,16 @@ function visibleLocalRecords(records) {
   const scoped = records.filter(record => record.syncStatus !== 'delete-pending' && recordHasLotAccess(record));
   return ['admin', 'supervisor'].includes(state.user.role) ? scoped : scoped.filter(record => record.ownerUsername === state.user.username);
 }
+$('#flight-report-filters').addEventListener('change', renderFlightReport);
+$('#flight-report-refresh').addEventListener('click', () => loadFlightReportRecords().catch(handleFlightReportError));
+$('#flight-report-pdf').addEventListener('click', () => {
+  try {
+    generateFlightReportPdf();
+  } catch (error) {
+    console.error('No se pudo generar el PDF acumulado de Vuelos.', error);
+    toast(error.message || 'No se pudo generar el PDF acumulado de Vuelos.');
+  }
+});
 $('#import-local').addEventListener('click', async () => {
   try {
     const result = await syncCloudRecords(true);

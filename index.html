@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#174b38">
   <meta name="description" content="Captura de labores aéreas y terrestres para MyM Data">
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="app.css?v=21">
+  <link rel="stylesheet" href="app.css?v=22">
   <title>MyM Campo</title>
 </head>
 <body>
@@ -278,10 +278,42 @@
         <form method="dialog" class="dialog-actions"><button class="secondary-button" type="submit">Cerrar</button></form>
       </div>
     </dialog>
+    <dialog id="flight-report-dialog" class="record-detail-dialog flight-report-dialog" aria-labelledby="flight-report-title">
+      <div class="record-detail-card">
+        <div class="record-detail-heading">
+          <div><p class="eyebrow">VUELOS · RESUMEN ACUMULADO</p><h2 id="flight-report-title">Resumen de vuelos por dron</h2></div>
+          <form method="dialog"><button class="record-detail-close" type="submit" aria-label="Cerrar resumen de vuelos">×</button></form>
+        </div>
+        <p id="flight-report-status" class="record-detail-summary" role="status" aria-live="polite">Cargando capturas de Vuelos guardadas en este dispositivo…</p>
+        <div id="flight-report-filters" class="flight-report-filters">
+          <div class="field"><label class="field-label" for="flight-report-from">Desde</label><input id="flight-report-from" class="text-input" type="date"></div>
+          <div class="field"><label class="field-label" for="flight-report-to">Hasta</label><input id="flight-report-to" class="text-input" type="date"></div>
+          <div class="field"><label class="field-label" for="flight-report-finca">Finca</label><select id="flight-report-finca" class="select-input"><option value="">Todas las fincas</option></select></div>
+          <div class="field"><label class="field-label" for="flight-report-zona">Zona</label><select id="flight-report-zona" class="select-input"><option value="">Todas las zonas</option></select></div>
+          <div class="field"><label class="field-label" for="flight-report-labor">Labor</label><select id="flight-report-labor" class="select-input"><option value="">Todas las labores</option></select></div>
+        </div>
+        <div class="flight-report-toolbar">
+          <div><p class="eyebrow">RESULTADOS DE LOS FILTROS</p><p id="flight-report-summary" class="flight-report-summary">0 vuelos · 0.00 ha · 0.00 L</p></div>
+          <div class="flight-report-actions">
+            <button id="flight-report-refresh" class="secondary-button" type="button">Actualizar vista</button>
+            <button id="flight-report-pdf" class="primary-button" type="button">Generar PDF acumulado</button>
+          </div>
+        </div>
+        <div class="flight-report-table-wrap">
+          <table class="flight-report-table" aria-label="Vuelos, hectáreas y litros agrupados por dron">
+            <thead><tr><th scope="col">Dron</th><th scope="col">Vuelos</th><th scope="col">Hectáreas</th><th scope="col">Litros usados</th></tr></thead>
+            <tbody id="flight-report-rows"><tr><td colspan="4">Carga las capturas para consultar el resumen.</td></tr></tbody>
+            <tfoot id="flight-report-totals"><tr><th scope="row">Total</th><td>0</td><td>0.00</td><td>0.00</td></tr></tfoot>
+          </table>
+        </div>
+        <p id="flight-report-data-note" class="field-hint" role="status" aria-live="polite"></p>
+        <form method="dialog" class="dialog-actions"><button class="secondary-button" type="submit">Cerrar</button></form>
+      </div>
+    </dialog>
     <nav class="mobile-nav" aria-label="Navegación móvil"><button data-page="inicio" class="active"><span>⌂</span>Inicio</button><button data-page="capturar"><span>＋</span>Capturar</button><button data-page="pendientes"><span>◷</span>Pendientes</button><button data-page="registros"><span>▤</span>Registros</button><button class="reviewer-nav" data-page="seguimiento-lotes" aria-label="Seguimiento de lotes" hidden><span>◷</span>Lotes</button><button class="admin-mobile-nav" data-page="usuarios" hidden><span>♙</span>Usuarios</button></nav>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </div>
   <script src="config.js"></script>
-  <script src="app.js?v=40"></script>
+  <script src="app.js?v=41"></script>
 </body>
 </html>

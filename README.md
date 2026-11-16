@@ -10,6 +10,8 @@ Las capturas nuevas se guardan primero en el dispositivo y se envían cuando vue
 
 En **Registros**, las capturas EPP incluyen **Generar PDF**. La opción abre la vista de impresión del navegador para imprimir o guardar el reporte como PDF; incluye los conteos de asistencia y cumplimiento por función, los datos de la captura y el estado de sincronización/revisión.
 
+Las capturas de Malezas también incluyen **Generar PDF**. El reporte por captura muestra un mapa de los lotes con geometría disponible, coloreados por % CONTROL, además de control, cobertura y las imágenes de cada lote. El % COBERTURA se calcula automáticamente como `100 - % CONTROL` y queda vacío cuando no hay un control válido; los mapas requieren los límites protegidos de Supabase, salvo que ya se hayan cargado en la sesión.
+
 **La sincronización no queda activa con este cambio por sí solo.** Es necesario crear y configurar el proyecto Supabase, aplicar la migración y proporcionar su URL y clave pública. No se creó ningún servicio ni se desplegó la aplicación.
 
 ## Configuración

@@ -110,7 +110,7 @@ const childSchemas = {
     { label: 'LOTE', key: 'LOTE', lotLookup: true },
     { label: 'LABOR', key: 'LABOR', type: 'select', required: true, options: ['Plantilla', 'Soca'] },
     { label: '% CONTROL', key: '% CONTROL', type: 'number', step: '0.01', min: '0', max: '100' },
-    { label: '% COBERTURA', key: '% COBERTURA', type: 'number', step: '0.01', min: '0', max: '100' },
+    { label: '% COBERTURA', key: '% COBERTURA', type: 'number', step: '0.01', min: '0', max: '100', readonly: true, hint: 'Se calcula automáticamente como 100 menos el % CONTROL.' },
     { label: 'IMÁGENES', key: 'IMAGEN', type: 'file', accept: 'image/*', multiple: true, hint: 'Puedes seleccionar una o varias imágenes para este lote.', full: true },
     { label: 'CATORCENA', key: 'CATORCENA', type: 'number', step: '1', readonly: true, hint: 'Se calcula automáticamente según la fecha del detalle.' },
     { label: 'OBSERVACIONES', key: 'OBSERVACIONES', type: 'textarea', full: true }
@@ -797,6 +797,14 @@ function updateWeedsCatorcena(row) {
       : 'Sin catorcena: fecha fuera del calendario disponible (20/10/2025 al 17/10/2027).';
   }
 }
+function updateWeedsCoverage(row) {
+  if (!row) return;
+  const controlInput = row.querySelector('[data-child-field="% CONTROL"]');
+  const coverageInput = row.querySelector('[data-child-field="% COBERTURA"]');
+  if (!coverageInput) return;
+  const coverage = malezasCoveragePercent(controlInput && controlInput.value);
+  coverageInput.value = coverage == null ? '' : String(coverage);
+}
 function syncWeedsDetailDates(rows, dateValue) {
   for (const row of rows) {
     const dateInput = row.querySelector('[data-child-field="FECHA"]');
@@ -883,11 +891,14 @@ function addChildRow(key) {
     const row = list.lastElementChild;
     const visitDate = $('#form-fields [name="FECHA"]');
     const detailDate = row.querySelector('[data-child-field="FECHA"]');
+    const controlInput = row.querySelector('[data-child-field="% CONTROL"]');
+    if (controlInput) controlInput.addEventListener('input', () => updateWeedsCoverage(row));
     if (visitDate && detailDate) {
       detailDate.value = visitDate.value;
       detailDate.dataset.visitDateValue = visitDate.value;
     }
     updateWeedsCatorcena(row);
+    updateWeedsCoverage(row);
   }
 }
 function renderQualityDetails(type) {
@@ -1073,6 +1084,8 @@ async function serializeForm(form, recordId, previousData) {
       if (key === 'malezas_detalle') {
         serialized.ID = oldRow && oldRow.ID || crypto.randomUUID();
         serialized.ID_NEW = recordId;
+        const coverage = malezasCoveragePercent(serialized['% CONTROL']);
+        serialized['% COBERTURA'] = coverage == null ? '' : String(coverage);
       }
       return serialized;
     }));
@@ -1182,6 +1195,7 @@ function populateCaptureForm(record) {
       row.dataset.originalIndex = String(index);
       setChildFields(row, rowData);
       if (list.dataset.repeatList === 'malezas_detalle') {
+        updateWeedsCoverage(row);
         const detailDate = row.querySelector('[data-child-field="FECHA"]');
         const visitDate = data.FECHA || data.fecha || '';
         if (detailDate) {
@@ -1408,6 +1422,174 @@ async function generateEppPdf(recordId) {
     throw error;
   }
 }
+function malezasReportDocument(record, boundaries) {
+  const data = record.datos || {};
+  const rows = malezasReportRows(record);
+  const map = malezasReportMapSvg(boundaries, rows);
+  const missingLots = [...new Set(rows
+    .map(row => row.lotCode)
+    .filter(code => code && !map.lotCodes.has(code)))];
+  const missingMapNote = missingLots.length
+    ? '<p class="malezas-report-map-note">Sin geometría disponible para: ' + esc(missingLots.join(', ')) + '.</p>'
+    : '';
+  const metadata = [
+    ['Fecha', data.FECHA || data.fecha ? formatDate(data.FECHA || data.fecha) : 'Sin fecha'],
+    ['Finca', data.FINCA || data.finca || 'Sin finca'],
+    ['Zona', data.ZONA || data.zona || 'Sin zona'],
+    ['Responsable', record.ownerName || data.RESPONSABLE || data.responsable || 'Sin responsable'],
+    ['Ubicación GPS', data['UBICACIÓN'] || data.ubicacion || 'Sin ubicación'],
+    ['Hora', recordDetailTime(data.hora_registro) || 'Sin hora'],
+    ['Estado', recordStatus(record)],
+    ['Lotes en la captura', String(new Set(rows.map(row => row.lotCode).filter(Boolean)).size)]
+  ].map(([label, value]) => '<div class="malezas-report-meta"><strong>' + esc(label) +
+    ':</strong><span>' + esc(value) + '</span></div>').join('');
+  const detailMarkup = rows.map((row, index) => {
+    const control = row.controlPercent == null ? 'Sin dato' : formatVisitMapControlPercent(row.controlPercent);
+    const coverage = row.coveragePercent == null ? 'Sin dato' : formatVisitMapControlPercent(row.coveragePercent);
+    const images = row.images.length
+      ? '<div class="malezas-report-photos">' + row.images.map(image =>
+        '<figure><img src="' + esc(image.dataUrl) + '" alt="' +
+        esc(image.name || 'Imagen del lote ' + (row.lotCode || 'sin identificar')) +
+        '"><figcaption>' + esc(image.name || 'Imagen del lote') + '</figcaption></figure>'
+      ).join('') + '</div>'
+      : '<p class="malezas-report-no-photos">Sin imágenes adjuntas para este lote.</p>';
+    return '<section class="malezas-report-lot"><header><div><h3>Lote ' +
+      esc(row.lotCode || 'Sin identificar') + '</h3><p>' + esc(row.labor || 'Sin labor') +
+      ' · ' + esc(row.date ? formatDate(row.date.slice(0, 10)) : 'Sin fecha') +
+      (row.catorcena ? ' · Catorcena ' + esc(row.catorcena) : '') +
+      '</p></div><span>Detalle ' + (index + 1) + '</span></header>' +
+      '<div class="malezas-report-metrics"><div><small>% Control</small><strong>' +
+      esc(control) + '</strong></div><div><small>% Cobertura (100 - control)</small><strong>' +
+      esc(coverage) + '</strong></div></div>' +
+      (row.observations ? '<p class="malezas-report-observations"><strong>Observaciones:</strong> ' +
+        esc(row.observations) + '</p>' : '') + images + '</section>';
+  }).join('');
+  const imageCount = rows.reduce((total, row) => total + row.images.length, 0);
+  const filename = 'Malezas-' + slug(data.FINCA || data.finca || 'captura') + '-' +
+    String(data.FECHA || data.fecha || localDate()).replace(/[^0-9-]/g, '');
+  const styles = `
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #182720; font-family: Arial, Helvetica, sans-serif; font-size: 9px; line-height: 1.45; }
+    .malezas-report { width: 100%; margin: 0 auto; }
+    .malezas-report-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; margin: 0 0 9px; padding: 1px 0 9px; border-bottom: 2px solid #174b38; }
+    .malezas-report-title { margin: 0; color: #182720; font-size: 18px; font-weight: 700; }
+    .malezas-report-period { margin: 3px 0 0; color: #718078; font-size: 8px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+    .malezas-report-brand { padding-top: 2px; color: #174b38; font-size: 8px; font-weight: 800; letter-spacing: .14em; line-height: 1.2; text-align: right; }
+    .malezas-report-meta-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; margin: 0 0 12px; }
+    .malezas-report-meta { display: flex; gap: 6px; min-width: 0; border-bottom: 1px solid #e4eae5; padding: 4px 2px; }
+    .malezas-report-meta strong { color: #718078; font-size: 7px; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
+    .malezas-report-meta span { overflow-wrap: anywhere; }
+    .malezas-report-section-title { margin: 13px 0 6px; padding: 0 0 5px; border-bottom: 1px solid #cfd8d1; color: #26342c; font-size: 9px; letter-spacing: .06em; text-transform: uppercase; }
+    .malezas-report-map { margin: 0; border: 1px solid #dce5de; padding: 5px; break-inside: avoid; page-break-inside: avoid; }
+    .malezas-report-map-svg { display: block; width: 100%; max-height: 112mm; }
+    .malezas-map-lot { fill: #f4f6f3; stroke: #9aa99e; stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+    .malezas-map-lot.is-visited { fill-opacity: .9; }
+    .malezas-map-lot.control-missing { fill: #b9c9d2; stroke: #657b85; }
+    .malezas-map-lot.control-low { fill: #de9b91; stroke: #9f493f; }
+    .malezas-map-lot.control-medium-low { fill: #e8b37d; stroke: #9b672e; }
+    .malezas-map-lot.control-medium-high { fill: #e4d27f; stroke: #82702b; }
+    .malezas-map-lot.control-high { fill: #93bf96; stroke: #3e7048; }
+    .malezas-map-label { fill: #182720; stroke: #fff; stroke-width: 3px; paint-order: stroke; font-size: 14px; font-weight: 700; text-anchor: middle; dominant-baseline: central; }
+    .malezas-report-map-empty, .malezas-report-map-note, .malezas-report-no-photos { color: #718078; font-size: 8px; }
+    .malezas-report-map-note { margin: 5px 0 0; }
+    .malezas-report-legend { display: flex; flex-wrap: wrap; gap: 5px 12px; margin: 6px 0 0; padding: 0; list-style: none; color: #405448; font-size: 7px; }
+    .malezas-report-legend li { display: inline-flex; align-items: center; gap: 4px; }
+    .malezas-report-swatch { display: inline-block; width: 9px; height: 9px; border: 1px solid #9aa99e; }
+    .malezas-report-swatch.control-missing { background: #b9c9d2; border-color: #657b85; }
+    .malezas-report-swatch.control-low { background: #de9b91; border-color: #9f493f; }
+    .malezas-report-swatch.control-medium-low { background: #e8b37d; border-color: #9b672e; }
+    .malezas-report-swatch.control-medium-high { background: #e4d27f; border-color: #82702b; }
+    .malezas-report-swatch.control-high { background: #93bf96; border-color: #3e7048; }
+    .malezas-report-lot { margin: 9px 0 0; border: 1px solid #dce5de; padding: 8px; }
+    .malezas-report-lot > header { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; margin: 0 0 6px; }
+    .malezas-report-lot > header { break-after: avoid-page; }
+    .malezas-report-lot h3 { margin: 0; color: #174b38; font-size: 12px; }
+    .malezas-report-lot header p { margin: 2px 0 0; color: #718078; font-size: 8px; }
+    .malezas-report-lot header > span { color: #718078; font-size: 7px; white-space: nowrap; }
+    .malezas-report-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .malezas-report-metrics > div { display: flex; justify-content: space-between; gap: 8px; border-left: 3px solid #174b38; padding: 5px 7px; background: #f2f6f3; }
+    .malezas-report-metrics small { color: #718078; font-size: 7px; font-weight: 700; text-transform: uppercase; }
+    .malezas-report-metrics strong { color: #174b38; font-size: 11px; }
+    .malezas-report-observations { margin: 6px 0; overflow-wrap: anywhere; }
+    .malezas-report-photos { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-top: 7px; }
+    .malezas-report-photos figure { margin: 0; border: 1px solid #e4eae5; padding: 4px; break-inside: avoid; page-break-inside: avoid; }
+    .malezas-report-photos img { display: block; width: 100%; height: 62mm; object-fit: contain; background: #f8faf8; }
+    .malezas-report-photos figcaption { margin-top: 3px; color: #718078; font-size: 7px; overflow-wrap: anywhere; }
+    .malezas-report-no-photos { margin: 6px 0 0; }
+    @page { size: letter portrait; margin: 10mm; }
+    @media print {
+      body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+      .malezas-report-header, .malezas-report-section-title { break-after: avoid-page; }
+    }
+  `;
+  return '<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>' +
+    esc(filename) + '</title><style>' + styles + '</style></head><body><main class="malezas-report">' +
+    '<header class="malezas-report-header"><div><h1 class="malezas-report-title">MUESTREO DE MALEZAS</h1><p class="malezas-report-period">Reporte por captura</p></div><div class="malezas-report-brand">MADRE<br>TIERRA</div></header>' +
+    '<section class="malezas-report-meta-grid">' + metadata + '</section>' +
+    '<div class="malezas-report-summary"><strong>' + rows.length + (rows.length === 1 ? ' detalle' : ' detalles') +
+    ' por lote · ' + imageCount + (imageCount === 1 ? ' imagen' : ' imágenes') + '</strong></div>' +
+    '<h2 class="malezas-report-section-title">Mapa de lotes muestreados</h2>' +
+    '<figure class="malezas-report-map">' + map.markup + '</figure>' + missingMapNote +
+    '<ul class="malezas-report-legend"><li><i class="malezas-report-swatch control-missing"></i> Sin %</li>' +
+    '<li><i class="malezas-report-swatch control-low"></i> Menos de 25%</li>' +
+    '<li><i class="malezas-report-swatch control-medium-low"></i> 25 a menos de 50%</li>' +
+    '<li><i class="malezas-report-swatch control-medium-high"></i> 50 a menos de 75%</li>' +
+    '<li><i class="malezas-report-swatch control-high"></i> 75-100%</li></ul>' +
+    '<h2 class="malezas-report-section-title">Control, cobertura e imágenes por lote</h2>' +
+    (detailMarkup || '<p class="malezas-report-map-empty">La captura no contiene detalles de lotes.</p>') +
+    '</main></body></html>';
+}
+async function waitForReportImages(reportWindow) {
+  const images = [...reportWindow.document.images];
+  await Promise.all(images.map(async image => {
+    if (!image.complete) {
+      await new Promise((resolve, reject) => {
+        image.addEventListener('load', resolve, { once: true });
+        image.addEventListener('error', () => reject(new Error('No se pudo cargar una imagen adjunta del reporte.')), { once: true });
+      });
+    }
+    if (!image.naturalWidth) throw new Error('No se pudo cargar una imagen adjunta del reporte.');
+    if (image.decode) await image.decode();
+  }));
+}
+async function generateMalezasPdf(recordId) {
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) {
+    toast('Permite las ventanas emergentes para generar el PDF.');
+    return;
+  }
+  try {
+    const record = await getRecord(recordId);
+    if (!record || record.tipo !== 'malezas' || !visibleLocalRecords([record]).length) {
+      printWindow.close();
+      toast('Esta captura de Malezas no está disponible para tu perfil.');
+      return;
+    }
+    if (!malezasReportRows(record).length) {
+      printWindow.close();
+      toast('La captura no contiene lotes para incluir en el reporte.');
+      return;
+    }
+    let boundaries;
+    if (state.visitMap && Array.isArray(state.visitMap.boundaries)) {
+      boundaries = state.visitMap.boundaries;
+    } else {
+      if (!state.configured) throw new Error('Configura el espacio compartido para cargar los límites protegidos.');
+      if (!navigator.onLine) throw new Error('Conéctate a internet o abre primero el mapa de muestreos para generar el reporte.');
+      boundaries = await loadVisitMapBoundaries();
+    }
+    boundaries = boundaries.filter(boundary => userCanAccessZone(boundary.zone));
+    printWindow.document.open();
+    printWindow.document.write(malezasReportDocument(record, boundaries));
+    printWindow.document.close();
+    await waitForReportImages(printWindow);
+    printWindow.focus();
+    printWindow.print();
+  } catch (error) {
+    printWindow.close();
+    throw error;
+  }
+}
 function recordDetailLabel(key) {
   const label = String(key).replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').trim();
   return label ? label.charAt(0).toLocaleUpperCase('es') + label.slice(1) : 'Dato';
@@ -1462,6 +1644,39 @@ function visitMapControlPercent(value) {
   if (normalized === '') return null;
   const percent = Number(normalized);
   return Number.isFinite(percent) && percent >= 0 && percent <= 100 ? percent : null;
+}
+function malezasCoveragePercent(controlValue) {
+  const control = visitMapControlPercent(controlValue);
+  return control == null ? null : Number((100 - control).toFixed(2));
+}
+function malezasReportImages(value) {
+  const images = Array.isArray(value) ? value : value ? [value] : [];
+  return images.filter(image =>
+    image && typeof image.dataUrl === 'string' &&
+    /^data:image\/[a-z0-9.+-]+;base64,/i.test(image.dataUrl)
+  );
+}
+function malezasReportRows(record) {
+  const data = record.datos || {};
+  const details = data.subregistros && Array.isArray(data.subregistros.malezas_detalle)
+    ? data.subregistros.malezas_detalle
+    : [];
+  const source = details.length
+    ? details
+    : normalizeVisitMapLotCode(data.LOTE == null ? data.lote : data.LOTE) ? [data] : [];
+  return source.filter(detail => detail && typeof detail === 'object').map(detail => {
+    const controlValue = detail['% CONTROL'];
+    return {
+      lotCode: normalizeVisitMapLotCode(detail.LOTE == null ? detail.lote : detail.LOTE),
+      date: String(detail.FECHA || data.FECHA || data.fecha || ''),
+      labor: String(detail.LABOR || ''),
+      controlPercent: visitMapControlPercent(controlValue),
+      coveragePercent: malezasCoveragePercent(controlValue),
+      observations: String(detail.OBSERVACIONES || ''),
+      catorcena: String(detail.CATORCENA || ''),
+      images: malezasReportImages(detail.IMAGEN)
+    };
+  });
 }
 function formatVisitMapControlPercent(percent) {
   return Number(percent.toFixed(2)).toString() + '%';
@@ -1543,6 +1758,84 @@ function visitMapRings(boundary) {
     rings.push(points);
   }
   return rings;
+}
+function malezasReportMapSvg(boundaries, rows) {
+  const latestByLot = new Map();
+  for (const row of rows) {
+    if (!row.lotCode) continue;
+    const previous = latestByLot.get(row.lotCode);
+    if (!previous || row.date >= previous.date) latestByLot.set(row.lotCode, row);
+  }
+  const lots = [];
+  for (const boundary of boundaries) {
+    const lotCode = normalizeVisitMapLotCode(boundary && boundary.lot_code);
+    const sample = latestByLot.get(lotCode);
+    if (!lotCode || !sample) continue;
+    const rings = boundary && Array.isArray(boundary.rings) ? boundary.rings : visitMapRings(boundary);
+    if (!rings) continue;
+    lots.push({
+      lot_code: lotCode,
+      rings,
+      finca: String(boundary.finca || ''),
+      sample
+    });
+  }
+  const lotCodes = new Set(lots.map(lot => lot.lot_code));
+  if (!lots.length) {
+    return {
+      markup: '<div class="malezas-report-map-empty">No se encontraron geometrías para los lotes de esta captura.</div>',
+      lotCodes
+    };
+  }
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const lot of lots) {
+    for (const ring of lot.rings) {
+      for (const point of ring) {
+        minX = Math.min(minX, point[0]);
+        minY = Math.min(minY, point[1]);
+        maxX = Math.max(maxX, point[0]);
+        maxY = Math.max(maxY, point[1]);
+      }
+    }
+  }
+  const width = 1000, height = 620, padding = 28;
+  const spanX = Math.max(maxX - minX, 1), spanY = Math.max(maxY - minY, 1);
+  const innerWidth = width - padding * 2, innerHeight = height - padding * 2;
+  const scale = Math.min(innerWidth / spanX, innerHeight / spanY);
+  const offsetX = padding + (innerWidth - spanX * scale) / 2;
+  const offsetY = padding + (innerHeight - spanY * scale) / 2;
+  const project = point => [
+    offsetX + (point[0] - minX) * scale,
+    height - offsetY - (point[1] - minY) * scale
+  ];
+  const shapes = lots.map(lot => {
+    const path = lot.rings.map(ring => {
+      const first = project(ring[0]);
+      return 'M ' + first[0].toFixed(1) + ' ' + first[1].toFixed(1) + ' ' +
+        ring.slice(1).map(point => {
+          const projected = project(point);
+          return 'L ' + projected[0].toFixed(1) + ' ' + projected[1].toFixed(1);
+        }).join(' ') + ' Z';
+    }).join(' ');
+    const className = visitMapControlClass({ latestControlPercent: lot.sample.controlPercent });
+    const control = lot.sample.controlPercent == null
+      ? 'Sin dato de control'
+      : 'Control ' + formatVisitMapControlPercent(lot.sample.controlPercent);
+    const outerRing = lot.rings[0].slice(0, -1);
+    const center = outerRing.reduce((sum, point) => [sum[0] + point[0], sum[1] + point[1]], [0, 0])
+      .map(value => value / Math.max(outerRing.length, 1));
+    const labelPoint = project(center);
+    return '<path class="malezas-map-lot' + className + '" d="' + path + '" fill-rule="evenodd"><title>' +
+      esc('Lote ' + lot.lot_code + (lot.finca ? ' · ' + lot.finca : '') + ' · ' + control) +
+      '</title></path><text class="malezas-map-label" x="' + labelPoint[0].toFixed(1) + '" y="' +
+      labelPoint[1].toFixed(1) + '">' + esc(lot.lot_code) + '</text>';
+  }).join('');
+  return {
+    markup: '<svg class="malezas-report-map-svg" viewBox="0 0 ' + width + ' ' + height +
+      '" role="img" aria-label="Mapa de lotes muestreados, coloreados por porcentaje de control">' + shapes + '</svg>',
+    lotCodes
+  };
 }
 function renderVisitMap(boundaries, visits) {
   const lots = [];
@@ -1627,7 +1920,11 @@ function renderVisitMap(boundaries, visits) {
   }).length;
   const totalVisits = lots.reduce((total, lot) => total + (visits.get(lot.lot_code) ? visits.get(lot.lot_code).visits : 0), 0);
   const unmatchedVisits = [...visits.keys()].filter(code => !lotMetadata.has(code)).length;
-  state.visitMap = { lots: lotMetadata, visits };
+  const validLotCodes = new Set(lots.map(lot => lot.lot_code));
+  const reportBoundaries = boundaries.filter(boundary =>
+    validLotCodes.has(normalizeVisitMapLotCode(boundary && boundary.lot_code))
+  );
+  state.visitMap = { lots: lotMetadata, visits, boundaries: reportBoundaries };
   summary.textContent = visitedLots + ' de ' + lots.length + ' lotes muestreados · ' +
     totalVisits + (totalVisits === 1 ? ' visita registrada' : ' visitas registradas') +
     ' · ' + lotsWithControl + ' con % de control';
@@ -1758,7 +2055,8 @@ function recordRow(record, management) {
     : '';
   const viewAction = '<button type="button" class="record-view-button" data-view-record="' + esc(record.id) + '" aria-label="Ver datos de ' + esc(titleFor(record)) + '">Ver datos</button>';
   const pdfAction = record.tipo === 'epp' ? '<button type="button" class="record-view-button" data-epp-pdf="' + esc(record.id) + '" aria-label="Generar PDF de ' + esc(titleFor(record)) + '">Generar PDF</button>' : '';
-  return '<article class="record-row"><span class="record-symbol" aria-hidden="true">' + module.icon + '</span><span class="record-info"><strong>' + esc(titleFor(record)) + '</strong><small>' + esc(detail) + '</small></span><span class="record-status">' + esc(status) + '</span>' + viewAction + pdfAction + actions + manageActions + '</article>';
+  const malezasPdfAction = record.tipo === 'malezas' ? '<button type="button" class="record-view-button" data-malezas-pdf="' + esc(record.id) + '" aria-label="Generar reporte PDF de ' + esc(titleFor(record)) + '">Generar PDF</button>' : '';
+  return '<article class="record-row"><span class="record-symbol" aria-hidden="true">' + module.icon + '</span><span class="record-info"><strong>' + esc(titleFor(record)) + '</strong><small>' + esc(detail) + '</small></span><span class="record-status">' + esc(status) + '</span>' + viewAction + pdfAction + malezasPdfAction + actions + manageActions + '</article>';
 }
 function emptyState(message) { return '<div class="empty-state">' + esc(message) + '</div>'; }
 async function refreshLists() {
@@ -2103,6 +2401,14 @@ document.addEventListener('click', event => {
     generateEppPdf(eppPdfButton.dataset.eppPdf).catch(error => {
       console.error(error);
       toast('No se pudo generar el PDF de la captura EPP.');
+    });
+    return;
+  }
+  const malezasPdfButton = event.target.closest('[data-malezas-pdf]');
+  if (malezasPdfButton) {
+    generateMalezasPdf(malezasPdfButton.dataset.malezasPdf).catch(error => {
+      console.error(error);
+      toast(error.message || 'No se pudo generar el PDF de la captura Malezas.');
     });
     return;
   }

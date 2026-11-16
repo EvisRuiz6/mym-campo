@@ -9,7 +9,7 @@ const helperEnd = appSource.indexOf('\nfunction visitMapRings(', helperStart);
 assert.ok(helperStart >= 0 && helperEnd > helperStart, 'Visit-map statistics helpers must exist in app.js');
 const helpers = runInNewContext(
   appSource.slice(helperStart, helperEnd) +
-  '\n({ visitMapControlPercent, formatVisitMapControlPercent, visitMapControlClass, visitStatsByLot })'
+  '\n({ visitMapControlPercent, malezasCoveragePercent, formatVisitMapControlPercent, visitMapControlClass, visitStatsByLot })'
 );
 
 test('parses valid control percentages and rejects out-of-range values', () => {
@@ -20,6 +20,15 @@ test('parses valid control percentages and rejects out-of-range values', () => {
   assert.equal(helpers.visitMapControlPercent('101'), null);
   assert.equal(helpers.visitMapControlPercent('-1'), null);
   assert.equal(helpers.formatVisitMapControlPercent(72.5), '72.5%');
+});
+
+test('calculates weed coverage as 100 minus control', () => {
+  assert.equal(helpers.malezasCoveragePercent(0), 100);
+  assert.equal(helpers.malezasCoveragePercent('72.5'), 27.5);
+  assert.equal(helpers.malezasCoveragePercent('25,25'), 74.75);
+  assert.equal(helpers.malezasCoveragePercent(100), 0);
+  assert.equal(helpers.malezasCoveragePercent(''), null);
+  assert.equal(helpers.malezasCoveragePercent(101), null);
 });
 
 test('uses the latest per-lot sample to display control and color', () => {

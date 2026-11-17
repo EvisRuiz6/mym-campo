@@ -47,7 +47,7 @@ Las políticas de seguridad se aplican en PostgreSQL aunque un cliente modifique
 
 ## Vuelos
 
-El formulario muestra la dosis objetivo de la labor, los litros por hectárea aplicados y la variación porcentual `((litros aplicados / dosis objetivo) / hectáreas aplicadas - 1) × 100`. La tabla de dosis está incluida en `app.js`, por lo que funciona sin conexión; el objetivo y los resultados se guardan en la captura local. Si faltan los datos o el área es cero, la variación se muestra como `—`.
+El formulario muestra el **volumen de aplicación** definido para la labor, el **volumen real** (`litros aplicados / hectáreas aplicadas`) y la variación porcentual `((volumen real / volumen de aplicación) - 1) × 100`. Los tres valores se actualizan automáticamente al cambiar la labor, los litros o el área. La tabla de volúmenes está incluida en `app.js`, por lo que el cálculo funciona sin conexión y los resultados se guardan en la captura local. Si faltan datos o el área es cero, el volumen real y la variación se muestran como `—`.
 
 | Labor | Litros/ha |
 | --- | ---: |
@@ -63,7 +63,7 @@ El formulario muestra la dosis objetivo de la labor, los litros por hectárea ap
 | Madurante_25 | 25 |
 | Madurante_30 | 30 |
 
-`Control de malezas` se conserva como opción por compatibilidad, pero no tiene dosis configurada, por lo que su variación aparece como `—`.
+`Control de malezas` se conserva como opción por compatibilidad, pero no tiene volumen de aplicación configurado, por lo que su variación aparece como `—`. El campo **Dron** ofrece T40-1, T50-1 a T50-4 y T100-1 a T100-4; al editar una captura antigua se conserva su dron si no pertenece a esa lista.
 
 Desde el formulario de Vuelos, **Resumen y PDF acumulado** abre una consulta local con filtros inclusivos por fecha, finca, zona y labor. La tabla siempre muestra T40-1, T50-1 a T50-4 y T100-1 a T100-4; también agrega cualquier otro dron guardado y vuelos sin dron identificado para que los totales incluyan todas las capturas coincidentes. El PDF de impresión aplica los mismos filtros y presenta los criterios seleccionados, vuelos, hectáreas y litros por dron. Capturas sin hectáreas o litros válidos se señalan y sus valores no se suman.
 

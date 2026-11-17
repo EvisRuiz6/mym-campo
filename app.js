@@ -768,25 +768,46 @@ function flightNumber(value) {
   return Number.isFinite(number) ? number : null;
 }
 function calculateFlightMetrics(labor, appliedLiters, appliedArea) {
-  const targetLitersPerHa = Object.prototype.hasOwnProperty.call(flightLitersPerHaByLabor, labor)
+  const applicationVolumeLitersPerHa = Object.prototype.hasOwnProperty.call(flightLitersPerHaByLabor, labor)
     ? flightLitersPerHaByLabor[labor]
     : null;
   const liters = flightNumber(appliedLiters);
   const area = flightNumber(appliedArea);
   const validApplication = liters !== null && liters >= 0 && area !== null && area > 0;
   const appliedLitersPerHa = validApplication ? liters / area : null;
-  const variationPercent = validApplication && targetLitersPerHa !== null
-    ? ((liters / targetLitersPerHa) / area - 1) * 100
+  const validAppliedVolume = Number.isFinite(appliedLitersPerHa);
+  const variationPercent = validAppliedVolume && applicationVolumeLitersPerHa !== null
+    ? (appliedLitersPerHa / applicationVolumeLitersPerHa - 1) * 100
     : null;
   return {
-    targetLitersPerHa,
-    appliedLitersPerHa: Number.isFinite(appliedLitersPerHa) ? appliedLitersPerHa : null,
+    applicationVolumeLitersPerHa,
+    appliedLitersPerHa: validAppliedVolume ? appliedLitersPerHa : null,
     variationPercent: Number.isFinite(variationPercent) ? variationPercent : null
   };
 }
 function formatFlightVariationPercent(value) {
   if (!Number.isFinite(value)) return '—';
   return (value > 0 ? '+' : '') + value.toFixed(1) + '%';
+}
+function updateFlightMetricsReadouts() {
+  const fields = $('#form-fields');
+  const laborInput = $('[name="labor"]', fields);
+  const litersInput = $('[name="litros"]', fields);
+  const areaInput = $('[name="area_ha"]', fields);
+  const applicationVolumeOutput = $('#application-volume-output', fields);
+  const realVolumeOutput = $('#real-volume-output', fields);
+  const variationOutput = $('#variation-output', fields);
+  if (!laborInput || !litersInput || !areaInput ||
+      !applicationVolumeOutput || !realVolumeOutput || !variationOutput) return;
+
+  const metrics = calculateFlightMetrics(laborInput.value, litersInput.value, areaInput.value);
+  applicationVolumeOutput.textContent = metrics.applicationVolumeLitersPerHa == null
+    ? (laborInput.value ? 'Sin volumen configurado' : '— L/ha')
+    : metrics.applicationVolumeLitersPerHa + ' L/ha';
+  realVolumeOutput.textContent = metrics.appliedLitersPerHa == null
+    ? '— L/ha'
+    : metrics.appliedLitersPerHa.toFixed(2) + ' L/ha';
+  variationOutput.textContent = formatFlightVariationPercent(metrics.variationPercent);
 }
 const FLIGHT_REPORT_DRONES = [
   'T40-1',
@@ -948,22 +969,28 @@ function formatFlightReportNumber(value) {
 }
 function flightFields() {
   const laborOptions = Object.keys(flightLitersPerHaByLabor);
-  laborOptions.push({ value: 'Control de malezas', label: 'Control de malezas (sin dosis configurada)' });
+  laborOptions.push({ value: 'Control de malezas', label: 'Control de malezas (sin volumen configurado)' });
   const legacyLabor = state.editingRecord && state.editingRecord.tipo === 'vuelos' &&
     state.editingRecord.datos && state.editingRecord.datos.labor;
   const hasLegacyLaborOption = laborOptions.some(option =>
     (typeof option === 'string' ? option : option.value) === legacyLabor);
   if (legacyLabor && !hasLegacyLaborOption) {
-    laborOptions.unshift({ value: legacyLabor, label: legacyLabor + ' (sin dosis configurada)' });
+    laborOptions.unshift({ value: legacyLabor, label: legacyLabor + ' (sin volumen configurado)' });
+  }
+  const droneOptions = FLIGHT_REPORT_DRONES.slice();
+  const legacyDrone = state.editingRecord && state.editingRecord.tipo === 'vuelos' &&
+    state.editingRecord.datos && String(state.editingRecord.datos.dron || '').trim();
+  if (legacyDrone && !droneOptions.includes(legacyDrone)) {
+    droneOptions.unshift({ value: legacyDrone, label: legacyDrone + ' (guardado en esta captura)' });
   }
   return '<section class="form-section flight-report-launch"><div><h2>Consulta de vuelos cargados</h2><p class="field-hint">Filtra las capturas por fechas, finca, zona y labor; consulta los totales o imprime un PDF acumulado.</p></div><button id="open-flight-report" class="secondary-button" data-open-flight-report type="button">Resumen y PDF acumulado</button></section>' +
     commonFields() + '<section class="form-section"><h2>Datos del vuelo</h2><div class="field-grid">' +
     fieldMarkup({ label: 'Labor', name: 'labor', type: 'select', required: true, options: laborOptions }, 'f-labor', true) +
-    fieldMarkup({ label: 'Dron', name: 'dron', placeholder: 'Identificador del dron' }, 'f-drone', true) +
+    fieldMarkup({ label: 'Dron', name: 'dron', type: 'select', options: droneOptions }, 'f-drone', true) +
     fieldMarkup({ label: 'Área aplicada (ha)', name: 'area_ha', type: 'number', min: '0.01', step: '0.01', required: true }, 'f-area', true) +
     fieldMarkup({ label: 'Litros aplicados (L)', name: 'litros', type: 'number', min: '0', step: '0.1', required: true }, 'f-liters', true) +
-    '<div class="field"><div class="calc-readout">Dosis objetivo <strong id="target-rate-output">— L/ha</strong></div></div>' +
-    '<div class="field"><div class="calc-readout">Aplicación calculada <strong id="rate-output">— L/ha</strong></div></div>' +
+    '<div class="field"><div class="calc-readout">Volumen de aplicación <strong id="application-volume-output">— L/ha</strong></div></div>' +
+    '<div class="field"><div class="calc-readout">Volumen real <strong id="real-volume-output">— L/ha</strong></div></div>' +
     '<div class="field full"><div class="calc-readout">Variación <strong id="variation-output">—</strong></div></div>' +
     fieldMarkup({ label: 'Observaciones', name: 'observaciones', type: 'textarea' }, 'f-notes', true) + '</div></section>';
 }
@@ -1224,22 +1251,7 @@ function chooseModule(key) {
     });
     updateEppSummary();
   }
-  if (key === 'vuelos') {
-    const updateFlightMetrics = () => {
-      const metrics = calculateFlightMetrics($('#f-labor').value, $('#f-liters').value, $('#f-area').value);
-      $('#target-rate-output').textContent = metrics.targetLitersPerHa == null
-        ? ($('#f-labor').value ? 'Sin dosis asignada' : '— L/ha')
-        : metrics.targetLitersPerHa + ' L/ha';
-      $('#rate-output').textContent = metrics.appliedLitersPerHa == null
-        ? '— L/ha'
-        : metrics.appliedLitersPerHa.toFixed(2) + ' L/ha';
-      $('#variation-output').textContent = formatFlightVariationPercent(metrics.variationPercent);
-    };
-    $('#f-labor').addEventListener('change', updateFlightMetrics);
-    $('#f-area').addEventListener('input', updateFlightMetrics);
-    $('#f-liters').addEventListener('input', updateFlightMetrics);
-    updateFlightMetrics();
-  }
+  if (key === 'vuelos') updateFlightMetricsReadouts();
   if (key === 'calibraciones_pcpm') $('#pcpm-labor').addEventListener('change', event => renderPcpmDetails(event.target.value));
   if (key === 'calibracion_aguilon') $('#ag-tipo-aguilon').addEventListener('change', event => renderAguilonDetails(event.target.value));
   $$('.picker-groups [data-module]').forEach(button => button.classList.toggle('selected', button.dataset.module === key));
@@ -1284,7 +1296,7 @@ async function serializeForm(form, recordId, previousData) {
   }
   if (state.currentModule === 'vuelos') {
     const metrics = calculateFlightMetrics(data.labor, data.litros, data.area_ha);
-    data.litros_por_hectarea_objetivo = metrics.targetLitersPerHa;
+    data.litros_por_hectarea_objetivo = metrics.applicationVolumeLitersPerHa;
     data.litros_por_hectarea = metrics.appliedLitersPerHa;
     data.variacion_porcentaje = metrics.variationPercent;
   }
@@ -1412,8 +1424,7 @@ function populateCaptureForm(record) {
     if (firstItem) firstItem.dispatchEvent(new Event('input', { bubbles: true }));
   }
   if (record.tipo === 'vuelos') {
-    const area = $('[name="area_ha"]', form);
-    if (area) area.dispatchEvent(new Event('input', { bubbles: true }));
+    updateFlightMetricsReadouts();
   }
   for (const list of $$('[data-repeat-list]', $('#form-fields'))) {
     const rows = Array.isArray(details[list.dataset.repeatList]) ? details[list.dataset.repeatList] : [];
@@ -1502,10 +1513,10 @@ function titleFor(record) {
   if (record.tipo === 'epp') return 'Conteo EPP · ' + (record.datos.labor || 'Labor');
   if (record.tipo === 'vuelos') {
     const metrics = calculateFlightMetrics(record.datos.labor, record.datos.litros, record.datos.area_ha);
-    const actualRate = metrics.appliedLitersPerHa == null ? 'vuelo' : metrics.appliedLitersPerHa.toFixed(2) + ' L/ha';
-    const targetRate = metrics.targetLitersPerHa == null ? '' : ' · objetivo ' + metrics.targetLitersPerHa + ' L/ha';
+    const actualVolume = metrics.appliedLitersPerHa == null ? '—' : metrics.appliedLitersPerHa.toFixed(2) + ' L/ha';
+    const applicationVolume = metrics.applicationVolumeLitersPerHa == null ? '' : ' · volumen de aplicación ' + metrics.applicationVolumeLitersPerHa + ' L/ha';
     const variation = metrics.variationPercent == null ? '' : ' · variación ' + formatFlightVariationPercent(metrics.variationPercent);
-    return 'Aplicación · ' + actualRate + targetRate + variation;
+    return 'Aplicación · volumen real ' + actualVolume + applicationVolume + variation;
   }
   if (record.tipo === 'calidad') return (qualityForms[record.datos.calidad_tipo] || {}).label || 'Supervisión de calidad';
   if (record.tipo === 'calibraciones_pcpm') return 'Calibración · ' + (record.datos.labor_pcpm || 'PC / PM');
@@ -3580,11 +3591,17 @@ document.addEventListener('change', event => {
 $('#capture-form').addEventListener('input', event => {
   if (event.target.matches('[data-lot-lookup]')) void updateLotLocations($('#form-fields'), false);
   if (event.target.matches('[data-farm-selector]')) updateZoneFromFarm($('#form-fields'));
+  if (state.currentModule === 'vuelos' && ['labor', 'litros', 'area_ha'].includes(event.target.name)) {
+    updateFlightMetricsReadouts();
+  }
   if (state.currentModule === 'malezas') updateWeedsDatesForInput(event.target);
 });
 $('#capture-form').addEventListener('change', event => {
   if (event.target.matches('[data-lot-lookup]')) void updateLotLocations($('#form-fields'), true);
   if (event.target.matches('[data-farm-selector]')) updateZoneFromFarm($('#form-fields'));
+  if (state.currentModule === 'vuelos' && ['labor', 'litros', 'area_ha'].includes(event.target.name)) {
+    updateFlightMetricsReadouts();
+  }
   if (state.currentModule === 'malezas') updateWeedsDatesForInput(event.target);
 });
 $('#form-fields').addEventListener('change', event => {

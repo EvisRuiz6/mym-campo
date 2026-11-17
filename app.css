@@ -187,6 +187,13 @@ dialog::backdrop { background: #17241c88; }
 .profile-card h2 { font-size: 19px; margin: 0 0 20px; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 22px; }
 .record-query-hint { color: var(--muted); font-size: 12px; margin: 12px 0 0; }
+.work-context-section { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.work-context-copy { min-width: 0; flex: 1; }
+.work-context-section h2 { margin-bottom: 5px; }
+.work-context-section .field-hint { margin: 0; }
+.work-context-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.work-context-actions .secondary-button { min-height: 36px; padding: 0 11px; font-size: 11px; }
+.work-context-error { color: #a33d32; }
 .record-detail-dialog { width: min(760px, calc(100% - 24px)); max-height: min(85vh, 780px); overflow-y: auto; }
 .visit-map-dialog { width: min(1120px, calc(100% - 24px)); max-height: min(90vh, 900px); }
 .flight-report-dialog { width: min(1040px, calc(100% - 24px)); max-height: min(90vh, 900px); }
@@ -289,6 +296,9 @@ dialog::backdrop { background: #17241c88; }
   .record-detail-dialog { width: calc(100% - 20px); max-height: calc(100dvh - 32px); }
   .flight-report-launch, .flight-report-toolbar { align-items: stretch; flex-direction: column; }
   .flight-report-launch .secondary-button, .flight-report-actions button { width: 100%; }
+  .work-context-section { align-items: stretch; flex-direction: column; }
+  .work-context-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .work-context-actions .secondary-button { width: 100%; }
   .record-detail-card { padding: 17px; }
   .record-detail-grid { grid-template-columns: 1fr; }
   .page .section-heading { align-items: end; }

@@ -47,6 +47,10 @@ Las políticas de seguridad se aplican en PostgreSQL aunque un cliente modifique
 
 ## Vuelos
 
+Clima y Vuelos conservan un borrador de trabajo local por cuenta. Los cambios se guardan automáticamente; **Guardar contexto** permite guardarlo explícitamente y **Nuevo contexto** descarta el borrador actual. Al volver al módulo, se recuperan los campos y las lecturas parciales; estos borradores permanecen en el dispositivo y no se sincronizan como capturas hasta completar y guardar el formulario.
+
+En Vuelos, cada envío crea un registro independiente con su propia hora asignada al presionar **Guardar vuelo**. Después de guardar, se mantienen fecha, finca, lote, zona y responsable para agregar vuelos a la misma jornada; cada vuelo conserva su labor, dron, hectáreas, litros, observaciones y hora. El identificador de contexto permite reconocer los vuelos de una misma jornada.
+
 El formulario muestra el **volumen de aplicación** definido para la labor, el **volumen real** (`litros aplicados / hectáreas aplicadas`) y la variación porcentual `((volumen real / volumen de aplicación) - 1) × 100`. Los tres valores se actualizan automáticamente al cambiar la labor, los litros o el área. La tabla de volúmenes está incluida en `app.js`, por lo que el cálculo funciona sin conexión y los resultados se guardan en la captura local. Si faltan datos o el área es cero, el volumen real y la variación se muestran como `—`.
 
 | Labor | Litros/ha |

@@ -275,9 +275,151 @@ function localDate() {
   const d = new Date();
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
-function localTime() {
-  const d = new Date();
+function localTime(date) {
+  const d = date || new Date();
   return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+}
+const WORK_CONTEXT_MODULES = ['clima', 'vuelos'];
+const WORK_CONTEXT_DRAFT_PREFIX = 'mym-campo-work-context-v1:';
+function captureTimestamp(value) {
+  const date = value == null ? new Date() : new Date(value);
+  return { createdAt: date.toISOString(), horaRegistro: localTime(date) };
+}
+function workContextDraftKey(moduleKey, ownerId) {
+  return WORK_CONTEXT_DRAFT_PREFIX + encodeURIComponent(String(ownerId)) + ':' + moduleKey;
+}
+function buildWorkContextDraftData(moduleKey, fields, weatherReadings) {
+  const data = {};
+  for (const field of Array.isArray(fields) ? fields : []) {
+    if (!field || !field.name || field.type === 'file' ||
+        (moduleKey === 'clima' && field.inWeatherRow)) continue;
+    data[field.name] = field.value == null ? '' : String(field.value);
+  }
+  if (moduleKey === 'clima') {
+    data.lecturas = (Array.isArray(weatherReadings) ? weatherReadings : []).map(reading =>
+      Object.fromEntries((Array.isArray(reading) ? reading : [])
+        .filter(field => field && field.name && field.type !== 'file')
+        .map(field => [field.name, field.value == null ? '' : String(field.value)]))
+    );
+  }
+  return data;
+}
+function workContextDraftHasContent(data) {
+  return Object.entries(data || {}).some(([name, value]) => {
+    if (name === 'contexto_vuelos_id' || name === 'hora_registro') return false;
+    if (Array.isArray(value)) {
+      return value.some(row => row && Object.values(row).some(item => String(item == null ? '' : item).trim() !== ''));
+    }
+    return String(value == null ? '' : value).trim() !== '';
+  });
+}
+function createWorkContextDraft(moduleKey, ownerId, data, updatedAt) {
+  if (!WORK_CONTEXT_MODULES.includes(moduleKey) || !ownerId ||
+      !data || typeof data !== 'object' || Array.isArray(data)) return null;
+  return {
+    version: 1,
+    moduleKey,
+    ownerId,
+    updatedAt: updatedAt || new Date().toISOString(),
+    data
+  };
+}
+function clearFlightEntryFields(form) {
+  for (const name of ['labor', 'dron', 'area_ha', 'litros', 'observaciones']) {
+    const input = form && form.querySelector('[name="' + name + '"]');
+    if (input) input.value = '';
+  }
+}
+function setWorkContextStatus(moduleKey, message, hasError) {
+  const status = $('[data-work-context-status="' + moduleKey + '"]', $('#form-fields'));
+  if (!status) return;
+  status.textContent = message;
+  status.classList.toggle('work-context-error', !!hasError);
+}
+function readWorkContextDraft(moduleKey) {
+  if (!state.user || !WORK_CONTEXT_MODULES.includes(moduleKey)) return null;
+  const key = workContextDraftKey(moduleKey, state.user.id);
+  try {
+    const stored = localStorage.getItem(key);
+    if (!stored) return null;
+    const draft = JSON.parse(stored);
+    if (!draft || draft.version !== 1 || draft.moduleKey !== moduleKey ||
+        draft.ownerId !== state.user.id || !draft.data ||
+        typeof draft.data !== 'object' || Array.isArray(draft.data)) {
+      throw new Error('El contexto guardado no coincide con esta cuenta o este formulario.');
+    }
+    return draft;
+  } catch (error) {
+    console.error('No se pudo recuperar el contexto de trabajo.', error);
+    setWorkContextStatus(moduleKey, 'No se pudo recuperar el contexto guardado.', true);
+    toast('No se pudo recuperar el contexto guardado en este dispositivo.');
+    return null;
+  }
+}
+function saveWorkContextDraft(moduleKey, force) {
+  if (!state.user || state.currentModule !== moduleKey ||
+      !WORK_CONTEXT_MODULES.includes(moduleKey) || state.editingRecord) return false;
+  const fieldsRoot = $('#form-fields');
+  if (!fieldsRoot) return false;
+  const readingsRoot = moduleKey === 'clima' ? $('#weather-rows') : null;
+  const fields = $$('[name]', fieldsRoot).map(input => ({
+    name: input.name,
+    value: input.type === 'checkbox' ? String(input.checked) : input.value,
+    type: input.type,
+    inWeatherRow: !!(readingsRoot && readingsRoot.contains(input))
+  }));
+  const readings = readingsRoot
+    ? $$('.repeat-row', readingsRoot).map(row => $$('[name]', row).map(input => ({
+      name: input.name,
+      value: input.type === 'checkbox' ? String(input.checked) : input.value,
+      type: input.type
+    })))
+    : [];
+  const data = buildWorkContextDraftData(moduleKey, fields, readings);
+  const draft = createWorkContextDraft(moduleKey, state.user.id, data);
+  if (!draft) return false;
+  const key = workContextDraftKey(moduleKey, state.user.id);
+  try {
+    const existing = localStorage.getItem(key);
+    if (!force && !existing && !workContextDraftHasContent(data)) {
+      setWorkContextStatus(moduleKey, 'Autoguardado activo. Se recuperará el contexto cuando haya datos.', false);
+      return true;
+    }
+    localStorage.setItem(key, JSON.stringify(draft));
+    setWorkContextStatus(moduleKey, 'Contexto guardado en este dispositivo.', false);
+    return true;
+  } catch (error) {
+    console.error('No se pudo guardar el contexto de trabajo.', error);
+    setWorkContextStatus(moduleKey, 'No se pudo guardar el contexto. Revisa el almacenamiento del dispositivo.', true);
+    return false;
+  }
+}
+function clearWorkContextDraft(moduleKey) {
+  if (!state.user || !WORK_CONTEXT_MODULES.includes(moduleKey)) return false;
+  try {
+    localStorage.removeItem(workContextDraftKey(moduleKey, state.user.id));
+    return true;
+  } catch (error) {
+    console.error('No se pudo borrar el contexto de trabajo.', error);
+    toast('No se pudo borrar el contexto guardado en este dispositivo.');
+    return false;
+  }
+}
+function restoreWorkContextDraft(moduleKey, draft) {
+  if (!draft || draft.moduleKey !== moduleKey) return false;
+  const data = { ...draft.data };
+  const readings = moduleKey === 'clima' && Array.isArray(data.lecturas) ? data.lecturas : [];
+  delete data.lecturas;
+  setNamedFields($('#form-fields'), data);
+  if (moduleKey === 'clima') {
+    const target = $('#weather-rows');
+    target.innerHTML = '';
+    readings.forEach((reading, index) => {
+      target.insertAdjacentHTML('beforeend', rowMarkup('weather', index));
+      setNamedFields(target.lastElementChild, reading);
+    });
+  }
+  return true;
 }
 function esc(value) {
   return String(value == null ? '' : value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -606,9 +748,22 @@ function fieldMarkup(field, prefix, includeName) {
   const hint = field.calculated ? '<div class="field-hint">Campo calculado en AppSheet; queda capturable hasta validar su fórmula.</div>' : field.hint ? '<div class="field-hint">' + esc(field.hint) + '</div>' : field.lotLookup ? '<div class="field-hint">Ingresa los 7 dígitos o selecciónalos de la lista; finca y zona se completan automáticamente.</div>' : '';
   return '<div class="field' + (field.full ? ' full' : '') + '"><label class="field-label" for="' + esc(id) + '">' + esc(field.label) + (field.required ? ' *' : '') + '</label>' + control + hint + '</div>';
 }
-function commonFields(withLotLookup) {
+function workContextControls(moduleKey) {
+  if (state.editingRecord) return '';
+  const title = moduleKey === 'vuelos' ? 'Contexto de jornada' : 'Contexto de trabajo';
+  return '<section class="form-section work-context-section"><div class="work-context-copy"><h2>' + title +
+    '</h2><p class="field-hint" data-work-context-status="' + moduleKey + '" role="status" aria-live="polite">Los cambios se guardan automáticamente en este dispositivo y se recuperan al volver.</p></div>' +
+    '<div class="work-context-actions"><button class="secondary-button" data-save-work-context="' + moduleKey +
+    '" type="button">Guardar contexto</button><button class="secondary-button" data-new-work-context="' + moduleKey +
+    '" type="button">Nuevo contexto</button></div></section>';
+}
+function commonFields(withLotLookup, options) {
   const lotLookup = !!withLotLookup;
+  const includeRecordTime = !options || options.includeRecordTime !== false;
   const farmOptions = [...new Set(Object.values(state.lotLookup).map(location => location.finca).filter(Boolean))].sort();
+  const recordTimeField = includeRecordTime
+    ? '<div class="field"><label class="field-label" for="f-recorded-at">Hora de registro (automática)</label><input id="f-recorded-at" name="hora_registro" class="text-input" type="time" value="' + localTime() + '" readonly><div class="field-hint">Solo se registra la hora; la fecha se captura por separado.</div></div>'
+    : '<div class="field"><div class="calc-readout">Hora de captura <strong>Se asigna al guardar cada vuelo</strong></div></div>';
   return '<section class="form-section"><h2>Datos de la actividad</h2><div class="field-grid">' +
     fieldMarkup({ label: 'Fecha', name: 'fecha', type: 'date', value: localDate(), required: true }, 'f-date', true) +
     fieldMarkup({ label: 'Responsable', name: 'responsable', value: state.user.displayName, required: true }, 'f-user', true) +
@@ -617,7 +772,7 @@ function commonFields(withLotLookup) {
     fieldMarkup({ label: 'Finca', name: 'finca', type: lotLookup ? 'text' : 'select', required: true, placeholder: lotLookup ? 'Se completa al ingresar un lote' : undefined, locationTarget: 'finca', farmSelector: true, options: lotLookup ? undefined : farmOptions }, 'f-farm', true) +
     '<div class="field full"><div class="field-hint" data-lot-location-status role="status">Ingresa un lote para completar finca y zona.</div></div>' +
     '<div class="field full"><div class="field-hint" data-farm-zone-status role="status"></div></div>' +
-    '<div class="field"><label class="field-label" for="f-recorded-at">Hora de registro (automática)</label><input id="f-recorded-at" name="hora_registro" class="text-input" type="time" value="' + localTime() + '" readonly><div class="field-hint">Solo se registra la hora; la fecha se captura por separado.</div></div>' +
+    recordTimeField +
     '</div></section>';
 }
 
@@ -718,7 +873,7 @@ function updateZoneFromFarm(form) {
   }
 }
 function climateFields() {
-  return commonFields(true) + '<section class="form-section"><h2>Datos del lote</h2><div class="field-grid">' +
+  return workContextControls('clima') + commonFields(true) + '<section class="form-section"><h2>Datos del lote</h2><div class="field-grid">' +
     fieldMarkup({ label: 'Lote', name: 'lote', lotLookup: true, required: true }, 'climate-lot', true) +
     '</div></section><section class="form-section"><h2>Ubicación</h2><div class="field-grid"><div class="field full"><label class="field-label" for="f-location">Coordenadas GPS (automáticas)</label><input id="f-location" name="ubicacion" class="text-input" placeholder="Solicitando ubicación…" readonly><input id="f-location-lat" name="latitud" type="hidden"><input id="f-location-lon" name="longitud" type="hidden"><input id="f-location-accuracy" name="precision_gps_m" type="hidden"><div class="location-controls"><span id="location-status" class="field-hint" role="status">Solicitando ubicación del dispositivo…</span><button id="retry-location" class="add-row" type="button">Actualizar ubicación</button></div></div></div></section>' +
     '<section class="form-section"><h2>Lecturas de clima</h2><p class="field-hint">Añade una fila por medición. Unidades: °C, %, km/h y °C para Delta T.</p><div id="weather-rows"></div><div class="inline-actions"><button id="add-weather" class="add-row" type="button">＋ Agregar lectura</button></div></section>';
@@ -984,7 +1139,9 @@ function flightFields() {
     droneOptions.unshift({ value: legacyDrone, label: legacyDrone + ' (guardado en esta captura)' });
   }
   return '<section class="form-section flight-report-launch"><div><h2>Consulta de vuelos cargados</h2><p class="field-hint">Filtra las capturas por fechas, finca, zona y labor; consulta los totales o imprime un PDF acumulado.</p></div><button id="open-flight-report" class="secondary-button" data-open-flight-report type="button">Resumen y PDF acumulado</button></section>' +
-    commonFields() + '<section class="form-section"><h2>Datos del vuelo</h2><div class="field-grid">' +
+    workContextControls('vuelos') + commonFields(false, { includeRecordTime: false }) +
+    '<input type="hidden" name="contexto_vuelos_id" id="flight-context-id">' +
+    '<section class="form-section"><h2>Datos del vuelo</h2><p class="field-hint">Cada guardado crea un registro independiente. La fecha, finca, lote, zona y responsable se conservan para agregar vuelos a esta jornada.</p><div class="field-grid">' +
     fieldMarkup({ label: 'Labor', name: 'labor', type: 'select', required: true, options: laborOptions }, 'f-labor', true) +
     fieldMarkup({ label: 'Dron', name: 'dron', type: 'select', options: droneOptions }, 'f-drone', true) +
     fieldMarkup({ label: 'Área aplicada (ha)', name: 'area_ha', type: 'number', min: '0.01', step: '0.01', required: true }, 'f-area', true) +
@@ -1197,19 +1354,29 @@ function chooseModule(key) {
   $('#module-picker').hidden = true;
   $('#capture-form').hidden = false;
   $('#form-fields').innerHTML = renderers[key]();
+  const savedWorkContext = !state.editingRecord && WORK_CONTEXT_MODULES.includes(key)
+    ? readWorkContextDraft(key)
+    : null;
   if (state.recordTimeTimer) clearInterval(state.recordTimeTimer);
-  state.recordTimeTimer = state.editingRecord ? null : setInterval(() => {
+  state.recordTimeTimer = state.editingRecord || key === 'vuelos' ? null : setInterval(() => {
     const input = $('#f-recorded-at');
     if (input) input.value = localTime();
   }, 15000);
   if (key === 'clima') {
-    let index = 0;
-    const add = () => $('#weather-rows').insertAdjacentHTML('beforeend', rowMarkup('weather', index++));
-    add();
-    $('#add-weather').addEventListener('click', add);
-    $('#weather-rows').addEventListener('click', event => { if (event.target.matches('.remove-row')) event.target.closest('.repeat-row').remove(); });
+    const add = saveDraft => {
+      const target = $('#weather-rows');
+      target.insertAdjacentHTML('beforeend', rowMarkup('weather', $$('.repeat-row', target).length));
+      if (saveDraft) saveWorkContextDraft('clima', false);
+    };
+    add(false);
+    $('#add-weather').addEventListener('click', () => add(true));
+    $('#weather-rows').addEventListener('click', event => {
+      const removeButton = event.target.closest('.remove-row');
+      if (!removeButton) return;
+      removeButton.closest('.repeat-row').remove();
+      saveWorkContextDraft('clima', false);
+    });
     $('#retry-location').addEventListener('click', captureLocation);
-    if (!state.editingRecord) captureLocation();
   }
   if (key === 'malezas') {
     $('#weeds-retry-location').addEventListener('click', captureWeedsLocation);
@@ -1251,7 +1418,28 @@ function chooseModule(key) {
     });
     updateEppSummary();
   }
-  if (key === 'vuelos') updateFlightMetricsReadouts();
+  if (key === 'vuelos') {
+    if (!state.editingRecord) $('#capture-submit').textContent = 'Guardar vuelo';
+    updateFlightMetricsReadouts();
+  }
+  if (savedWorkContext) {
+    restoreWorkContextDraft(key, savedWorkContext);
+    setWorkContextStatus(key, 'Contexto recuperado del dispositivo; los cambios continúan guardándose automáticamente.', false);
+    if (key === 'clima') {
+      const locationInput = $('[name="ubicacion"]', $('#form-fields'));
+      $('#location-status').textContent = locationInput && locationInput.value
+        ? 'Ubicación recuperada del contexto guardado.'
+        : 'No hay ubicación guardada; pulsa “Actualizar ubicación” para capturarla.';
+    }
+    void updateLotLocations($('#form-fields'), false).then(() => {
+      if (state.currentModule === key) saveWorkContextDraft(key, false);
+    });
+    if (key === 'vuelos') updateFlightMetricsReadouts();
+  } else if (key === 'vuelos' && !state.editingRecord) {
+    $('#flight-context-id').value = crypto.randomUUID();
+  } else if (key === 'clima' && !state.editingRecord) {
+    captureLocation();
+  }
   if (key === 'calibraciones_pcpm') $('#pcpm-labor').addEventListener('change', event => renderPcpmDetails(event.target.value));
   if (key === 'calibracion_aguilon') $('#ag-tipo-aguilon').addEventListener('change', event => renderAguilonDetails(event.target.value));
   $$('.picker-groups [data-module]').forEach(button => button.classList.toggle('selected', button.dataset.module === key));
@@ -2878,6 +3066,7 @@ function captureLocation() {
     $('#f-location-accuracy').value = Math.round(coords.accuracy);
     status.textContent = 'Ubicación capturada; precisión aproximada: ' + Math.round(coords.accuracy) + ' m.';
     button.disabled = false;
+    saveWorkContextDraft('clima', false);
   }, error => {
     if (!input.isConnected) return;
     status.textContent = error.code === 1 ? 'Permite la ubicación para este sitio y vuelve a intentarlo.' : error.code === 3 ? 'El GPS tardó demasiado. Pulsa “Actualizar ubicación” para reintentar.' : 'No se pudo obtener el GPS. Revisa el dispositivo y vuelve a intentarlo.';
@@ -3369,6 +3558,10 @@ function navigate(page) {
   if (!state.user) return;
   if (page === 'usuarios' && !isActiveAdmin()) { toast('Solo una cuenta administradora activa puede gestionar usuarios.'); return; }
   if (page === 'seguimiento-lotes' && !canAccessLotFollowup()) { toast('Solo una cuenta administradora o supervisora activa puede consultar el seguimiento de lotes.'); return; }
+  if (!state.editingRecord && WORK_CONTEXT_MODULES.includes(state.currentModule) &&
+      !saveWorkContextDraft(state.currentModule, false)) {
+    toast('No se pudo conservar el contexto de trabajo en este dispositivo.');
+  }
   if (state.recordTimeTimer) { clearInterval(state.recordTimeTimer); state.recordTimeTimer = null; }
   if (page !== 'capturar' && state.editingRecord) {
     state.editingRecord = null;
@@ -3446,6 +3639,10 @@ async function startSession(user, session) {
   }
 }
 async function endSession() {
+  if (!state.editingRecord && WORK_CONTEXT_MODULES.includes(state.currentModule) &&
+      !saveWorkContextDraft(state.currentModule, false)) {
+    toast('No se pudo conservar el contexto de trabajo en este dispositivo.');
+  }
   const session = state.authSession;
   if (session && navigator.onLine && state.configured) {
     try {
@@ -3557,6 +3754,24 @@ document.addEventListener('click', event => {
   const moduleButton = event.target.closest('[data-module]');
   if (moduleButton) { navigate('capturar'); chooseModule(moduleButton.dataset.module); }
 });
+$('#form-fields').addEventListener('click', event => {
+  const saveButton = event.target.closest('[data-save-work-context]');
+  if (saveButton) {
+    event.preventDefault();
+    const saved = saveWorkContextDraft(saveButton.dataset.saveWorkContext, true);
+    toast(saved ? 'Contexto guardado en este dispositivo.' : 'No se pudo guardar el contexto de trabajo.');
+    return;
+  }
+  const newContextButton = event.target.closest('[data-new-work-context]');
+  if (!newContextButton) return;
+  event.preventDefault();
+  const moduleKey = newContextButton.dataset.newWorkContext;
+  if (!window.confirm('¿Iniciar un contexto nuevo? El borrador actual de ' +
+      (moduleKey === 'vuelos' ? 'Vuelos' : 'Clima') + ' se eliminará de este dispositivo.')) return;
+  if (!clearWorkContextDraft(moduleKey)) return;
+  chooseModule(moduleKey);
+  toast('Contexto nuevo iniciado.');
+});
 document.addEventListener('change', event => {
   if (event.target.id === 'create-user-role') {
     updateCreateUserZoneVisibility();
@@ -3595,6 +3810,7 @@ $('#capture-form').addEventListener('input', event => {
     updateFlightMetricsReadouts();
   }
   if (state.currentModule === 'malezas') updateWeedsDatesForInput(event.target);
+  if (WORK_CONTEXT_MODULES.includes(state.currentModule)) saveWorkContextDraft(state.currentModule, false);
 });
 $('#capture-form').addEventListener('change', event => {
   if (event.target.matches('[data-lot-lookup]')) void updateLotLocations($('#form-fields'), true);
@@ -3603,6 +3819,7 @@ $('#capture-form').addEventListener('change', event => {
     updateFlightMetricsReadouts();
   }
   if (state.currentModule === 'malezas') updateWeedsDatesForInput(event.target);
+  if (WORK_CONTEXT_MODULES.includes(state.currentModule)) saveWorkContextDraft(state.currentModule, false);
 });
 $('#form-fields').addEventListener('change', event => {
   if (event.target.id === 'pcpm-labor') renderPcpmDetails(event.target.value);
@@ -3614,6 +3831,8 @@ $('#capture-form').addEventListener('submit', async event => {
   const form = event.currentTarget;
   if (!form.reportValidity()) return;
   const editing = state.editingRecord;
+  const moduleKey = state.currentModule;
+  const captureTime = captureTimestamp();
   if (editing && editing.syncStatus === 'synced' && !navigator.onLine) {
     toast('Conéctate a internet para guardar cambios de una captura sincronizada.');
     return;
@@ -3629,12 +3848,16 @@ $('#capture-form').addEventListener('submit', async event => {
     return;
   }
   if (state.currentModule === 'clima' && !$$('.repeat-row', $('#weather-rows')).length) { toast('Agrega por lo menos una lectura de clima.'); return; }
-  const createdAt = editing ? editing.createdAt : new Date().toISOString();
+  if (moduleKey === 'vuelos') {
+    const contextId = $('[name="contexto_vuelos_id"]', $('#form-fields'));
+    if (contextId && !contextId.value) contextId.value = crypto.randomUUID();
+  }
+  const createdAt = editing ? editing.createdAt : captureTime.createdAt;
   const recordId = editing ? editing.id : crypto.randomUUID();
   let datos;
   try { datos = await serializeForm(form, recordId, editing && editing.datos); }
   catch (error) { console.error(error); toast('No se pudo preparar la captura. Revisa los datos e inténtalo de nuevo.'); return; }
-  if (!editing) datos.hora_registro = localTime();
+  if (!editing) datos.hora_registro = captureTime.horaRegistro;
   const record = editing
     ? {
       ...editing, id: recordId, tipo: state.currentModule, createdAt, schemaVersion: 5,
@@ -3664,12 +3887,28 @@ $('#capture-form').addEventListener('submit', async event => {
   try {
     await putRecord(record);
     await refreshLists();
+    if (!editing && moduleKey === 'vuelos') {
+      clearFlightEntryFields($('#form-fields'));
+      updateFlightMetricsReadouts();
+      const contextSaved = saveWorkContextDraft('vuelos', true);
+      if (contextSaved) {
+        setWorkContextStatus('vuelos', 'Vuelo guardado como registro independiente. Puedes agregar otro a este contexto.', false);
+      }
+      toast(contextSaved
+        ? 'Vuelo guardado. Puedes agregar otro a la misma jornada.'
+        : 'Vuelo guardado, pero no se pudo conservar el contexto en este dispositivo.');
+      if (navigator.onLine) syncCloudRecords(false).catch(handleCloudError);
+      return;
+    }
+    const contextCleared = editing || moduleKey !== 'clima' || clearWorkContextDraft('clima');
     form.reset();
     $('#form-fields').innerHTML = '';
     $('#capture-submit').textContent = 'Guardar captura';
     state.editingRecord = null;
     state.currentModule = null;
-    toast(editing
+    toast(!contextCleared
+      ? 'Captura guardada, pero no se pudo borrar el contexto anterior de este dispositivo.'
+      : editing
       ? editing.syncStatus === 'synced' ? 'Cambios guardados; la captura volvió a revisión pendiente.' : 'Cambios guardados en este dispositivo.'
       : 'Guardado en este dispositivo.');
     navigate(editing ? 'gestionar' : 'inicio');

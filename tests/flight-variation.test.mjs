@@ -19,6 +19,10 @@ const flightFieldsStart = appSource.indexOf('function flightFields() {');
 const flightFieldsEnd = appSource.indexOf('\nfunction qualityFields()', flightFieldsStart);
 assert.ok(flightFieldsStart >= 0 && flightFieldsEnd > flightFieldsStart, 'Flight fields must be renderable');
 const flightFieldsSource = appSource.slice(flightFieldsStart, flightFieldsEnd);
+const commonFieldsStart = appSource.indexOf('function commonFields(withLotLookup, options) {');
+const commonFieldsEnd = appSource.indexOf('\nfunction clearAutoLocation', commonFieldsStart);
+assert.ok(commonFieldsStart >= 0 && commonFieldsEnd > commonFieldsStart, 'Common fields must be renderable');
+const commonFieldsSource = appSource.slice(commonFieldsStart, commonFieldsEnd);
 
 test('uses the configured application volume for every flight labor', () => {
   const expectedVolumes = {
@@ -119,6 +123,7 @@ test('provides the requested drones in a dropdown and preserves legacy values wh
       flightLitersPerHaByLabor: helpers.flightLitersPerHaByLabor,
       FLIGHT_REPORT_DRONES: helpers.FLIGHT_REPORT_DRONES,
       commonFields: () => '',
+      workContextControls: () => '',
       fieldMarkup: field => { fields.push(field); return ''; }
     });
     return fields.find(field => field.name === 'dron');
@@ -135,4 +140,33 @@ test('provides the requested drones in a dropdown and preserves legacy values wh
   const legacyField = getDroneOptions({ tipo: 'vuelos', datos: { dron: 't50' } });
   assert.equal(legacyField.options[0].value, 't50');
   assert.equal(legacyField.options[0].label, 't50 (guardado en esta captura)');
+});
+
+test('flight form stores a shared context and assigns its capture hour on save', () => {
+  const fields = [];
+  let includeRecordTime = true;
+  const markup = runInNewContext(flightFieldsSource + '\nflightFields();', {
+    state: { editingRecord: null },
+    flightLitersPerHaByLabor: helpers.flightLitersPerHaByLabor,
+    FLIGHT_REPORT_DRONES: helpers.FLIGHT_REPORT_DRONES,
+    commonFields: (withLotLookup, options) => {
+      assert.equal(withLotLookup, false);
+      includeRecordTime = options.includeRecordTime;
+      return '';
+    },
+    workContextControls: () => '',
+    fieldMarkup: field => { fields.push(field); return ''; }
+  });
+  assert.match(markup, /name="contexto_vuelos_id"/);
+  assert.equal(includeRecordTime, false);
+  assert.equal(fields.find(field => field.name === 'dron').type, 'select');
+
+  const commonMarkup = runInNewContext(commonFieldsSource + '\ncommonFields(false, { includeRecordTime: false });', {
+    state: { lotLookup: {}, user: { displayName: 'Operador' } },
+    fieldMarkup: () => '',
+    localDate: () => '2026-11-17',
+    localTime: () => '14:00'
+  });
+  assert.match(commonMarkup, /Se asigna al guardar cada vuelo/);
+  assert.doesNotMatch(commonMarkup, /name="hora_registro"/);
 });

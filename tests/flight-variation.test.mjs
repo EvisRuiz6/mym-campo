@@ -145,6 +145,7 @@ test('provides the requested drones in a dropdown and preserves legacy values wh
 test('flight form stores a shared context and assigns its capture hour on save', () => {
   const fields = [];
   let includeRecordTime = true;
+  let activityFields = '';
   const markup = runInNewContext(flightFieldsSource + '\nflightFields();', {
     state: { editingRecord: null },
     flightLitersPerHaByLabor: helpers.flightLitersPerHaByLabor,
@@ -152,13 +153,18 @@ test('flight form stores a shared context and assigns its capture hour on save',
     commonFields: (withLotLookup, options) => {
       assert.equal(withLotLookup, false);
       includeRecordTime = options.includeRecordTime;
-      return '';
+      activityFields = options.extraFields;
+      return '<section id="activity-fields">' + activityFields + '</section>';
     },
     workContextControls: () => '',
-    fieldMarkup: field => { fields.push(field); return ''; }
+    fieldMarkup: field => { fields.push(field); return '<input name="' + field.name + '">'; }
   });
   assert.match(markup, /name="contexto_vuelos_id"/);
   assert.equal(includeRecordTime, false);
+  assert.match(activityFields, /name="labor"/);
+  assert.equal(fields.find(field => field.name === 'labor').label, 'Labor de la actividad');
+  assert.match(fields.find(field => field.name === 'labor').hint, /todos los vuelos de esta actividad/);
+  assert.doesNotMatch(markup.slice(markup.indexOf('<h2>Datos del vuelo</h2>')), /name="labor"/);
   assert.equal(fields.find(field => field.name === 'dron').type, 'select');
 
   const commonMarkup = runInNewContext(commonFieldsSource + '\ncommonFields(false, { includeRecordTime: false });', {

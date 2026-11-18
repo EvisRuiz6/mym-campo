@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#174b38">
   <meta name="description" content="Captura de labores aéreas y terrestres para MyM Data">
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="app.css?v=22">
+  <link rel="stylesheet" href="app.css?v=23">
   <title>MyM Campo</title>
 </head>
 <body>
@@ -184,6 +184,56 @@
             </form>
           </section>
 
+          <section class="form-section lot-weekly-program-form-section">
+            <div class="section-heading">
+              <div><p class="eyebrow">PROGRAMA SEMANAL</p><h2 id="lot-weekly-program-title">Crear programa semanal</h2></div>
+            </div>
+            <form id="lot-weekly-program-form" novalidate>
+              <div class="field-grid">
+                <div class="field">
+                  <label class="field-label" for="lot-weekly-program-farm">Finca</label>
+                  <select id="lot-weekly-program-farm" class="select-input" required><option value="">Selecciona una finca</option></select>
+                </div>
+                <div class="field">
+                  <label class="field-label" for="lot-weekly-program-date">Fecha programada común</label>
+                  <input id="lot-weekly-program-date" class="text-input" type="date" required>
+                </div>
+                <div class="field full"><div id="lot-weekly-program-date-summary" class="calc-readout" role="status" aria-live="polite">Elige una finca y una fecha para ver la semana y el día programados.</div></div>
+              </div>
+              <p class="field-hint">Todos los lotes de una finca comparten una fecha en esa semana. Solo se pueden incluir lotes cuya fecha de siembra o corte permita la visita dentro de ±5 días.</p>
+              <div id="lot-weekly-program-candidates" class="lot-weekly-candidates" aria-live="polite">
+                <p class="lot-followup-empty">Selecciona una finca y fecha para consultar los lotes elegibles.</p>
+              </div>
+              <div class="form-actions">
+                <button id="lot-weekly-program-cancel" class="secondary-button" type="button" hidden>Cancelar edición</button>
+                <button id="lot-weekly-program-save" class="primary-button" type="submit">Guardar programa</button>
+              </div>
+              <p class="form-footnote">La fecha elegida determina la semana y el día común de visita. Puedes ajustar la fecha dentro del rango permitido para todos los lotes seleccionados.</p>
+            </form>
+          </section>
+
+          <section class="form-section lot-weekly-programs-section">
+            <div class="section-heading">
+              <div><p class="eyebrow">AGENDA DE VISITAS</p><h2>Programas semanales</h2></div>
+            </div>
+            <div class="record-toolbar lot-weekly-toolbar">
+              <label class="field"><span class="field-label">Finca</span><select id="lot-weekly-filter-farm" class="select-input"><option value="">Todas las fincas</option></select></label>
+              <label class="field"><span class="field-label">Semana</span><input id="lot-weekly-filter-week" class="text-input" type="date" aria-label="Filtrar por semana"></label>
+              <label class="field"><span class="field-label">Día programado</span>
+                <select id="lot-weekly-filter-day" class="select-input">
+                  <option value="">Todos los días</option>
+                  <option value="1">Lunes</option><option value="2">Martes</option><option value="3">Miércoles</option>
+                  <option value="4">Jueves</option><option value="5">Viernes</option><option value="6">Sábado</option><option value="0">Domingo</option>
+                </select>
+              </label>
+              <button id="lot-weekly-program-refresh" class="secondary-button" type="button">Actualizar</button>
+            </div>
+            <p class="record-query-hint">La semana se agrupa de lunes a domingo. La fecha y el día son comunes para los lotes de cada finca en esa semana.</p>
+            <div id="lot-weekly-program-list" class="lot-weekly-program-list">
+              <p class="lot-followup-empty">Carga los programas semanales para consultarlos.</p>
+            </div>
+          </section>
+
           <div class="record-toolbar lot-followup-toolbar">
             <label class="search-field">⌕ <input id="lot-followup-search" type="search" placeholder="Buscar finca, lote o responsable" aria-label="Buscar planes por lote"></label>
             <select id="lot-followup-filter" class="select-input" aria-label="Filtrar estado del seguimiento">
@@ -314,6 +364,6 @@
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </div>
   <script src="config.js"></script>
-  <script src="app.js?v=43"></script>
+  <script src="app.js?v=45"></script>
 </body>
 </html>

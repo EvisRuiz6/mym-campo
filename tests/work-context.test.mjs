@@ -9,7 +9,7 @@ const helperEnd = appSource.indexOf('\nfunction esc(value)', helperStart);
 assert.ok(helperStart >= 0 && helperEnd > helperStart, 'Work-context helpers must exist in app.js');
 const helpers = runInNewContext(
   appSource.slice(helperStart, helperEnd) +
-  '\n({ captureTimestamp, workContextDraftKey, buildWorkContextDraftData, workContextDraftHasContent, createWorkContextDraft, clearFlightEntryFields })'
+  '\n({ captureTimestamp, workContextDraftKey, buildWorkContextDraftData, workContextDraftHasContent, createWorkContextDraft, clearFlightEntryFields, flightActivityLaborUpdates, resolveFlightActivityLaborSelection })'
 );
 
 test('serializes Clima readings separately and excludes file inputs from local drafts', () => {
@@ -175,10 +175,96 @@ test('clears only the saved flight values while preserving jornada data', () => 
   };
   helpers.clearFlightEntryFields(form);
 
-  for (const name of ['labor', 'dron', 'area_ha', 'litros', 'observaciones']) {
+  for (const name of ['dron', 'area_ha', 'litros', 'observaciones']) {
     assert.equal(values[name].value, '');
   }
+  assert.equal(values.labor.value, 'Madurante');
   for (const name of ['fecha', 'finca', 'lote', 'zona', 'responsable', 'contexto_vuelos_id']) {
     assert.notEqual(values[name].value, '');
   }
+});
+
+test('updates the labor for every flight in one activity and queues synced records', () => {
+  const records = [
+    {
+      id: 'flight-1',
+      tipo: 'vuelos',
+      ownerId: 'owner-1',
+      ownerUsername: 'operator',
+      syncStatus: 'synced',
+      reviewStatus: 'approved',
+      reviewedBy: 'reviewer-1',
+      reviewedAt: '2026-11-17T17:00:00.000Z',
+      reviewNote: 'Revisado',
+      datos: { contexto_vuelos_id: 'activity-1', labor: 'Madurante', area_ha: '4' }
+    },
+    {
+      id: 'flight-2',
+      tipo: 'vuelos',
+      ownerUsername: 'operator',
+      syncStatus: 'pending',
+      syncOrigin: 'new',
+      datos: { contexto_vuelos_id: 'activity-1', labor: 'Premadurante', area_ha: '2' }
+    },
+    {
+      id: 'other-owner',
+      tipo: 'vuelos',
+      ownerId: 'owner-2',
+      ownerUsername: 'other',
+      syncStatus: 'synced',
+      datos: { contexto_vuelos_id: 'activity-1', labor: 'Madurante' }
+    },
+    {
+      id: 'other-activity',
+      tipo: 'vuelos',
+      ownerId: 'owner-1',
+      ownerUsername: 'operator',
+      syncStatus: 'synced',
+      datos: { contexto_vuelos_id: 'activity-2', labor: 'Madurante' }
+    }
+  ];
+
+  const updates = helpers.flightActivityLaborUpdates(
+    records,
+    'activity-1',
+    'Bioestimulante',
+    'owner-1',
+    'operator'
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(updates.map(record => record.id))), ['flight-1', 'flight-2']);
+  assert.equal(updates[0].datos.labor, 'Bioestimulante');
+  assert.equal(updates[0].datos.contexto_vuelos_id, 'activity-1');
+  assert.equal(updates[0].syncStatus, 'pending');
+  assert.equal(updates[0].syncOrigin, 'activity-update');
+  assert.equal(updates[0].reviewStatus, 'pending');
+  assert.equal(updates[0].reviewedBy, null);
+  assert.equal(updates[0].reviewedAt, null);
+  assert.equal(updates[0].reviewNote, null);
+  assert.equal(updates[1].syncOrigin, 'new');
+  assert.equal(records[0].datos.labor, 'Madurante');
+  assert.equal(helpers.flightActivityLaborUpdates(
+    updates,
+    'activity-1',
+    'Bioestimulante',
+    'owner-1',
+    'operator'
+  ).length, 0);
+});
+
+test('keeps the latest successful activity labor when a later selection fails', () => {
+  const input = {
+    value: 'Madurante',
+    isConnected: true,
+    dataset: { activityLabor: 'Madurante' }
+  };
+  input.value = 'Premadurante';
+  input.value = 'Bioestimulante';
+
+  assert.equal(helpers.resolveFlightActivityLaborSelection(input, 'Premadurante', { ok: true }), false);
+  assert.equal(input.dataset.activityLabor, 'Premadurante');
+  assert.equal(input.value, 'Bioestimulante');
+
+  assert.equal(helpers.resolveFlightActivityLaborSelection(input, 'Bioestimulante', { ok: false }), true);
+  assert.equal(input.dataset.activityLabor, 'Premadurante');
+  assert.equal(input.value, 'Premadurante');
 });

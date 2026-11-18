@@ -10,7 +10,9 @@ const helperEnd = appSource.indexOf('\nfunction visitMapControlPercent(', helper
 assert.ok(helperStart >= 0 && helperEnd > helperStart, 'Lot follow-up helpers must exist in app.js');
 const helpers = runInNewContext(
   appSource.slice(helperStart, helperEnd) +
-  '\n({ parseXlsxWorkbook, parseLotFollowupRows, excelDateToIso, evaluateLotFollowup })',
+  '\n({ parseXlsxWorkbook, parseLotFollowupRows, excelDateToIso, evaluateLotFollowup, ' +
+  'lotWeeklyProgramWeekStart, lotWeeklyProgramDay, filterLotWeeklyPrograms, ' +
+  'lotWeeklyProgramCandidates, lotWeeklyProgramDateBounds })',
   { Blob, Response, TextDecoder, DecompressionStream }
 );
 
@@ -155,4 +157,94 @@ test('does not mark a plan with no scheduled visits as fulfilled', () => {
   );
   assert.equal(result.fulfilled, false);
   assert.equal(result.statusKey, 'unscheduled');
+});
+
+test('weekly visit candidates include the inclusive five-day window and stay within the farm', () => {
+  const plans = [
+    { lot_code: '1', cycle_date: '2026-03-01' },
+    { lot_code: '2', cycle_date: '2026-03-11' },
+    { lot_code: '3', cycle_date: '2026-03-01' },
+    { lot_code: '1', cycle_date: '2026-03-01' }
+  ];
+  const lots = {
+    '0000001': { finca: 'Finca A' },
+    '0000002': { finca: 'Finca A' },
+    '0000003': { finca: 'Finca B' }
+  };
+  const exactBoundary = helpers.lotWeeklyProgramCandidates(plans, lots, ' Finca A ', '2026-03-06');
+  assert.deepEqual(JSON.parse(JSON.stringify(exactBoundary.map(item => item.lotCode))), ['0000001', '0000002']);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(helpers.lotWeeklyProgramCandidates(plans, lots, 'Finca A', '2026-03-07').map(item => item.lotCode))),
+    ['0000002']
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(helpers.lotWeeklyProgramCandidates(plans, lots, 'Finca A', '2026-03-05').map(item => item.lotCode))),
+    ['0000001']
+  );
+});
+
+test('weekly programs group dates Monday through Sunday and intersect all lot windows', () => {
+  assert.equal(helpers.lotWeeklyProgramWeekStart('2026-11-16'), '2026-11-16');
+  assert.equal(helpers.lotWeeklyProgramWeekStart('2026-11-22'), '2026-11-16');
+  assert.equal(helpers.lotWeeklyProgramDay('2026-11-22'), 0);
+
+  const bounds = helpers.lotWeeklyProgramDateBounds({
+    week_start: '2026-11-16',
+    members: [
+      { reference_date: '2026-11-18' },
+      { reference_date: '2026-11-21' }
+    ]
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(bounds)), {
+    start: '2026-11-16',
+    end: '2026-11-22',
+    valid: true
+  });
+  const impossible = helpers.lotWeeklyProgramDateBounds({
+    week_start: '2026-11-16',
+    members: [{ reference_date: '2026-11-08' }]
+  });
+  assert.equal(impossible.valid, false);
+  assert.equal(impossible.start, '2026-11-16');
+  assert.equal(impossible.end, '2026-11-13');
+
+  const protectedBounds = helpers.lotWeeklyProgramDateBounds({
+    week_start: '2026-11-16',
+    members: [{ reference_date: '2026-11-18' }],
+    protected_date_start: '2026-11-19',
+    protected_date_end: '2026-11-20'
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(protectedBounds)), {
+    start: '2026-11-19',
+    end: '2026-11-20',
+    valid: true
+  });
+});
+
+test('weekly-program filters match farm, calendar week, and scheduled weekday', () => {
+  const programs = [
+    { id: 'a', farm: 'Finca A', week_start: '2026-03-02', scheduled_date: '2026-03-04' },
+    { id: 'b', farm: 'Finca A', week_start: '2026-03-09', scheduled_date: '2026-03-15' },
+    { id: 'c', farm: 'Finca B', week_start: '2026-03-02', scheduled_date: '2026-03-08' }
+  ];
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(helpers.filterLotWeeklyPrograms(programs, ' finca a ', '2026-03-14', '0').map(item => item.id))),
+    ['b']
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(helpers.filterLotWeeklyPrograms(programs, '', '2026-03-04', '').map(item => item.id))),
+    ['a', 'c']
+  );
+});
+
+test('existing weekly-program members keep their saved reference date if the plan changes', () => {
+  const candidates = helpers.lotWeeklyProgramCandidates(
+    [{ lot_code: '1', cycle_date: '2026-03-01' }],
+    { '0000001': { finca: 'Finca A' } },
+    'Finca A',
+    '2026-03-10',
+    { members: [{ lot_code: '0000001', reference_date: '2026-03-11' }] }
+  );
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].referenceDate, '2026-03-11');
 });

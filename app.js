@@ -213,7 +213,7 @@ const childSchemas = {
 };
 const $ = (selector, root) => (root || document).querySelector(selector);
 const $$ = (selector, root) => [...(root || document).querySelectorAll(selector)];
-const state = { db: null, user: null, authSession: null, configured: false, syncConnected: false, syncBusy: false, refreshPromise: null, currentModule: null, editingRecord: null, recordTimeTimer: null, lotLookup: Object.create(null), lotLookupRequests: new Map(), zoneOptions: [], visitMap: null, flightReportRecords: [], acceptingInvite: false, lotFollowupPlans: [], lotFollowupVisits: [], lotFollowupLoadPromise: null, lotFollowupDateId: 0, editingLotFollowup: null };
+const state = { db: null, user: null, authSession: null, configured: false, syncConnected: false, syncBusy: false, syncIdleWaiters: [], syncRequested: false, flightActivityLaborBusy: false, flightActivityLaborQueue: Promise.resolve(), flightActivityLaborUpdatePromise: null, refreshPromise: null, currentModule: null, editingRecord: null, recordTimeTimer: null, lotLookup: Object.create(null), lotLookupRequests: new Map(), zoneOptions: [], visitMap: null, flightReportRecords: [], acceptingInvite: false, lotFollowupPlans: [], lotFollowupVisits: [], lotWeeklyPrograms: [], lotFollowupLoadPromise: null, lotFollowupDateId: 0, editingLotFollowup: null, editingLotWeeklyProgramId: null, lotWeeklyProgramDraftKey: '', lotWeeklyProgramDraftLotCodes: [] };
 
 function lotLookupCacheKey() {
   const scopeKey = [state.user.role, ...(state.user.allowedZones || []).slice().sort()].join(':');
@@ -325,10 +325,46 @@ function createWorkContextDraft(moduleKey, ownerId, data, updatedAt) {
   };
 }
 function clearFlightEntryFields(form) {
-  for (const name of ['labor', 'dron', 'area_ha', 'litros', 'observaciones']) {
+  for (const name of ['dron', 'area_ha', 'litros', 'observaciones']) {
     const input = form && form.querySelector('[name="' + name + '"]');
     if (input) input.value = '';
   }
+}
+function flightActivityLaborUpdates(records, contextId, labor, ownerId, ownerUsername) {
+  const activityId = String(contextId || '');
+  const activityLabor = String(labor || '').trim();
+  if (!activityId || !activityLabor) return [];
+  return (Array.isArray(records) ? records : []).reduce((updates, record) => {
+    const data = record && record.datos && typeof record.datos === 'object' && !Array.isArray(record.datos)
+      ? record.datos
+      : null;
+    const sameOwner = record && ownerId && record.ownerId
+      ? record.ownerId === ownerId
+      : !!(record && ownerUsername && record.ownerUsername === ownerUsername);
+    if (!data || record.tipo !== 'vuelos' || record.syncStatus === 'delete-pending' || !sameOwner ||
+        String(data.contexto_vuelos_id || '') !== activityId ||
+        String(data.labor || '').trim() === activityLabor) return updates;
+    const updated = { ...record, datos: { ...data, labor: activityLabor } };
+    if (record.syncStatus === 'synced') {
+      updated.syncStatus = 'pending';
+      updated.syncOrigin = 'activity-update';
+      updated.reviewStatus = 'pending';
+      updated.reviewedBy = null;
+      updated.reviewedAt = null;
+      updated.reviewNote = null;
+    }
+    updates.push(updated);
+    return updates;
+  }, []);
+}
+function resolveFlightActivityLaborSelection(input, requestedLabor, result) {
+  if (!input) return false;
+  if (result && result.ok) input.dataset.activityLabor = requestedLabor;
+  const isCurrentSelection = input.isConnected && input.value === requestedLabor;
+  if (isCurrentSelection && (!result || !result.ok)) {
+    input.value = input.dataset.activityLabor || '';
+  }
+  return isCurrentSelection;
 }
 function setWorkContextStatus(moduleKey, message, hasError) {
   const status = $('[data-work-context-status="' + moduleKey + '"]', $('#form-fields'));
@@ -451,6 +487,16 @@ function storeRequest(storeName, mode, action) {
 const getRecords = () => storeRequest('records', 'readonly', store => store.getAll());
 const getRecord = id => storeRequest('records', 'readonly', store => store.get(id));
 const putRecord = record => storeRequest('records', 'readwrite', store => store.put(record));
+function putRecords(records) {
+  return new Promise((resolve, reject) => {
+    const tx = state.db.transaction('records', 'readwrite');
+    const store = tx.objectStore('records');
+    for (const record of records) store.put(record);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error || new Error('No se pudieron actualizar los registros locales.'));
+    tx.onabort = () => reject(tx.error || new Error('La actualización local de registros fue cancelada.'));
+  });
+}
 const deleteRecord = id => storeRequest('records', 'readwrite', store => store.delete(id));
 function supabaseConfig() {
   const config = window.MYM_CONFIG || {};
@@ -551,11 +597,18 @@ async function syncCloudRecords(importLegacy) {
     if (importLegacy) throw new Error('Conéctate a internet antes de importar los registros.');
     return { uploaded: 0, downloaded: 0 };
   }
+  if (state.flightActivityLaborBusy) {
+    if (importLegacy) throw new Error('Espera a que termine la actualización de la labor de la actividad antes de importar.');
+    state.syncRequested = true;
+    return { uploaded: 0, downloaded: 0 };
+  }
   if (state.syncBusy) {
     if (importLegacy) throw new Error('La sincronización ya está en curso. Intenta de nuevo en unos segundos.');
+    state.syncRequested = true;
     return { uploaded: 0, downloaded: 0 };
   }
   state.syncBusy = true;
+  state.syncRequested = false;
   try {
     let records = await getRecords();
     let deleted = 0;
@@ -575,7 +628,7 @@ async function syncCloudRecords(importLegacy) {
     const outgoing = records.filter(record =>
       record.syncStatus === 'pending' &&
       record.ownerUsername === state.user.username &&
-      (record.syncOrigin === 'new' || importLegacy)
+      (record.syncOrigin === 'new' || (importLegacy && !record.syncOrigin))
     );
     for (const record of outgoing) {
       await cloudRequest('field_records?on_conflict=id', {
@@ -591,6 +644,25 @@ async function syncCloudRecords(importLegacy) {
       });
       delete record.syncOrigin;
       record.syncStatus = 'synced';
+      await putRecord(record);
+    }
+
+    const activityLaborUpdates = records.filter(record =>
+      record.syncStatus === 'pending' &&
+      record.syncOrigin === 'activity-update' &&
+      (record.ownerUsername === state.user.username || isActiveAdmin())
+    );
+    for (const record of activityLaborUpdates) {
+      await cloudRequest('rpc/update_field_record', {
+        method: 'POST',
+        body: { p_record_id: record.id, p_schema_version: record.schemaVersion || 1, p_datos: record.datos }
+      });
+      delete record.syncOrigin;
+      record.syncStatus = 'synced';
+      record.reviewStatus = 'pending';
+      record.reviewedBy = null;
+      record.reviewedAt = null;
+      record.reviewNote = null;
       await putRecord(record);
     }
 
@@ -613,10 +685,82 @@ async function syncCloudRecords(importLegacy) {
     state.syncConnected = true;
     updateConnection();
     await refreshLists();
-    return { uploaded: outgoing.length, downloaded: remote.length, deleted };
+    return { uploaded: outgoing.length, updated: activityLaborUpdates.length, downloaded: remote.length, deleted };
   } finally {
     state.syncBusy = false;
+    const waiters = state.syncIdleWaiters.splice(0);
+    for (const resolve of waiters) resolve();
+    if (state.syncRequested && !state.flightActivityLaborBusy && navigator.onLine) {
+      Promise.resolve().then(() => syncCloudRecords(false)).catch(handleCloudError);
+    }
   }
+}
+function waitForSyncIdle() {
+  if (!state.syncBusy) return Promise.resolve();
+  return new Promise(resolve => state.syncIdleWaiters.push(resolve));
+}
+async function applyFlightActivityLabor(contextId, labor, ownerId, ownerUsername) {
+  if (!String(contextId || '').trim() || !String(labor || '').trim()) {
+    return { ok: true, updated: 0, pending: false };
+  }
+  while (state.syncBusy) await waitForSyncIdle();
+  state.flightActivityLaborBusy = true;
+  let updates = [];
+  let updateError = null;
+  try {
+    updates = flightActivityLaborUpdates(await getRecords(), contextId, labor, ownerId, ownerUsername);
+    if (updates.length) await putRecords(updates);
+  } catch (error) {
+    updateError = error;
+  } finally {
+    state.flightActivityLaborBusy = false;
+  }
+
+  if (state.syncRequested && state.configured && navigator.onLine) {
+    try {
+      await syncCloudRecords(false);
+    } catch (error) {
+      handleCloudError(error);
+    }
+  } else if (!updateError && updates.length && state.configured && navigator.onLine) {
+    try {
+      await syncCloudRecords(false);
+    } catch (error) {
+      handleCloudError(error);
+    }
+  }
+  if (updateError) {
+    console.error('No se pudo actualizar la labor de los vuelos relacionados.', updateError);
+    toast('No se pudo actualizar la labor de todos los vuelos de la actividad. Inténtalo de nuevo.');
+    return { ok: false, updated: updates.length, pending: true, error: updateError };
+  }
+
+  await refreshLists();
+  const updatedIds = new Set(updates.map(record => record.id));
+  const localRecords = await getRecords();
+  const pending = localRecords.some(record => updatedIds.has(record.id) && record.syncStatus === 'pending');
+  return { ok: true, updated: updates.length, pending };
+}
+function queueFlightActivityLaborUpdate(contextId, labor, ownerId, ownerUsername) {
+  const previous = state.flightActivityLaborQueue || Promise.resolve();
+  const update = previous.catch(error => {
+    console.error('Falló una actualización anterior de la labor de Vuelos.', error);
+  }).then(() => applyFlightActivityLabor(contextId, labor, ownerId, ownerUsername));
+  const handled = update.catch(error => {
+    console.error('No se pudo completar la actualización de la labor de Vuelos.', error);
+    toast('No se pudo actualizar la labor de los vuelos relacionados. Inténtalo de nuevo.');
+    return { ok: false, updated: 0, pending: true, error };
+  });
+  state.flightActivityLaborQueue = handled;
+  state.flightActivityLaborUpdatePromise = handled;
+  return handled;
+}
+function flightActivityLaborMessage(result) {
+  if (!result || !result.updated) return 'Labor guardada para los siguientes vuelos de esta actividad.';
+  if (result.pending) {
+    return 'Labor actualizada localmente en ' + result.updated + ' vuelo(s); se sincronizará al recuperar conexión.';
+  }
+  return 'Labor actualizada en ' + result.updated + ' vuelo(s) de esta actividad.';
 }
 async function refreshCloudProfile() {
   const profile = await fetchProfile(state.authSession.user.id);
@@ -760,6 +904,7 @@ function workContextControls(moduleKey) {
 function commonFields(withLotLookup, options) {
   const lotLookup = !!withLotLookup;
   const includeRecordTime = !options || options.includeRecordTime !== false;
+  const extraFields = options && options.extraFields ? options.extraFields : '';
   const farmOptions = [...new Set(Object.values(state.lotLookup).map(location => location.finca).filter(Boolean))].sort();
   const recordTimeField = includeRecordTime
     ? '<div class="field"><label class="field-label" for="f-recorded-at">Hora de registro (automática)</label><input id="f-recorded-at" name="hora_registro" class="text-input" type="time" value="' + localTime() + '" readonly><div class="field-hint">Solo se registra la hora; la fecha se captura por separado.</div></div>'
@@ -772,7 +917,7 @@ function commonFields(withLotLookup, options) {
     fieldMarkup({ label: 'Finca', name: 'finca', type: lotLookup ? 'text' : 'select', required: true, placeholder: lotLookup ? 'Se completa al ingresar un lote' : undefined, locationTarget: 'finca', farmSelector: true, options: lotLookup ? undefined : farmOptions }, 'f-farm', true) +
     '<div class="field full"><div class="field-hint" data-lot-location-status role="status">Ingresa un lote para completar finca y zona.</div></div>' +
     '<div class="field full"><div class="field-hint" data-farm-zone-status role="status"></div></div>' +
-    recordTimeField +
+    recordTimeField + extraFields +
     '</div></section>';
 }
 
@@ -1138,11 +1283,18 @@ function flightFields() {
   if (legacyDrone && !droneOptions.includes(legacyDrone)) {
     droneOptions.unshift({ value: legacyDrone, label: legacyDrone + ' (guardado en esta captura)' });
   }
+  const activityLaborField = fieldMarkup({
+    label: 'Labor de la actividad',
+    name: 'labor',
+    type: 'select',
+    required: true,
+    options: laborOptions,
+    hint: 'La labor se asigna a todos los vuelos de esta actividad. Si la cambias, se actualizan los vuelos guardados.'
+  }, 'f-labor', true);
   return '<section class="form-section flight-report-launch"><div><h2>Consulta de vuelos cargados</h2><p class="field-hint">Filtra las capturas por fechas, finca, zona y labor; consulta los totales o imprime un PDF acumulado.</p></div><button id="open-flight-report" class="secondary-button" data-open-flight-report type="button">Resumen y PDF acumulado</button></section>' +
-    workContextControls('vuelos') + commonFields(false, { includeRecordTime: false }) +
+    workContextControls('vuelos') + commonFields(false, { includeRecordTime: false, extraFields: activityLaborField }) +
     '<input type="hidden" name="contexto_vuelos_id" id="flight-context-id">' +
-    '<section class="form-section"><h2>Datos del vuelo</h2><p class="field-hint">Cada guardado crea un registro independiente. La fecha, finca, lote, zona y responsable se conservan para agregar vuelos a esta jornada.</p><div class="field-grid">' +
-    fieldMarkup({ label: 'Labor', name: 'labor', type: 'select', required: true, options: laborOptions }, 'f-labor', true) +
+    '<section class="form-section"><h2>Datos del vuelo</h2><p class="field-hint">Cada guardado crea un registro independiente con la labor definida en la actividad. La fecha, finca, lote, zona, responsable y labor se conservan para agregar vuelos a esta jornada.</p><div class="field-grid">' +
     fieldMarkup({ label: 'Dron', name: 'dron', type: 'select', options: droneOptions }, 'f-drone', true) +
     fieldMarkup({ label: 'Área aplicada (ha)', name: 'area_ha', type: 'number', min: '0.01', step: '0.01', required: true }, 'f-area', true) +
     fieldMarkup({ label: 'Litros aplicados (L)', name: 'litros', type: 'number', min: '0', step: '0.1', required: true }, 'f-liters', true) +
@@ -1348,6 +1500,7 @@ function chooseModule(key) {
   const module = modules[key];
   const canEditExisting = state.editingRecord && state.editingRecord.tipo === key && canManageRecord(state.editingRecord);
   if (!module || (!userCanOpenModule(key) && !canEditExisting)) { toast('Este apartado no está disponible para tu perfil.'); return; }
+  if (key === 'vuelos') state.flightActivityLaborUpdatePromise = null;
   state.currentModule = key;
   $('#form-title').textContent = module.title;
   $('#form-subtitle').textContent = module.subtitle;
@@ -1423,6 +1576,16 @@ function chooseModule(key) {
     updateFlightMetricsReadouts();
   }
   if (savedWorkContext) {
+    if (key === 'vuelos' && savedWorkContext.data.labor) {
+      const laborInput = $('[name="labor"]', $('#form-fields'));
+      const savedLabor = String(savedWorkContext.data.labor);
+      if (laborInput && !Array.from(laborInput.options).some(option => option.value === savedLabor)) {
+        const option = document.createElement('option');
+        option.value = savedLabor;
+        option.textContent = savedLabor + ' (guardada en esta actividad)';
+        laborInput.appendChild(option);
+      }
+    }
     restoreWorkContextDraft(key, savedWorkContext);
     setWorkContextStatus(key, 'Contexto recuperado del dispositivo; los cambios continúan guardándose automáticamente.', false);
     if (key === 'clima') {
@@ -1435,10 +1598,27 @@ function chooseModule(key) {
       if (state.currentModule === key) saveWorkContextDraft(key, false);
     });
     if (key === 'vuelos') updateFlightMetricsReadouts();
-  } else if (key === 'vuelos' && !state.editingRecord) {
-    $('#flight-context-id').value = crypto.randomUUID();
   } else if (key === 'clima' && !state.editingRecord) {
     captureLocation();
+  }
+  if (key === 'vuelos' && !state.editingRecord) {
+    const contextInput = $('[name="contexto_vuelos_id"]', $('#form-fields'));
+    const laborInput = $('[name="labor"]', $('#form-fields'));
+    if (contextInput && !contextInput.value) contextInput.value = crypto.randomUUID();
+    if (laborInput) laborInput.dataset.activityLabor = laborInput.value;
+    if (savedWorkContext && contextInput && laborInput && contextInput.value && laborInput.value) {
+      state.flightActivityLaborUpdatePromise = queueFlightActivityLaborUpdate(
+        contextInput.value,
+        laborInput.value,
+        state.user.id,
+        state.user.username
+      ).then(result => {
+        if (state.currentModule === 'vuelos' && result.ok) {
+          setWorkContextStatus('vuelos', flightActivityLaborMessage(result), false);
+        }
+        return result;
+      });
+    }
   }
   if (key === 'calibraciones_pcpm') $('#pcpm-labor').addEventListener('change', event => renderPcpmDetails(event.target.value));
   if (key === 'calibracion_aguilon') $('#ag-tipo-aguilon').addEventListener('change', event => renderAguilonDetails(event.target.value));
@@ -1656,6 +1836,10 @@ async function editCapture(recordId) {
   state.editingRecord = record;
   chooseModule(record.tipo);
   populateCaptureForm(record);
+  if (record.tipo === 'vuelos') {
+    const laborInput = $('[name="labor"]', $('#form-fields'));
+    if (laborInput) laborInput.dataset.activityLabor = laborInput.value;
+  }
   $('#capture-eyebrow').textContent = 'EDITAR CAPTURA';
   $('#form-title').textContent = 'Editar ' + modules[record.tipo].title;
   $('#form-subtitle').textContent = record.syncStatus === 'synced'
@@ -2584,6 +2768,108 @@ function evaluateLotFollowup(plan, visits, today) {
     slots
   };
 }
+const LOT_WEEKLY_VISIT_WINDOW_DAYS = 5;
+function normalizeLotFarmLabel(value) {
+  return String(value || '').trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').toLowerCase();
+}
+function normalizeLotWeeklyFarm(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+function lotWeeklyProgramDate(value) {
+  const date = String(value || '').slice(0, 10);
+  return excelDateToIso(date) === date ? date : '';
+}
+function lotWeeklyProgramShiftDate(value, days) {
+  const dateValue = lotWeeklyProgramDate(value);
+  if (!dateValue || !Number.isInteger(days)) return '';
+  const date = new Date(dateValue + 'T00:00:00Z');
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+function lotWeeklyProgramWeekStart(value) {
+  const dateValue = lotWeeklyProgramDate(value);
+  if (!dateValue) return '';
+  const date = new Date(dateValue + 'T00:00:00Z');
+  date.setUTCDate(date.getUTCDate() - ((date.getUTCDay() + 6) % 7));
+  return date.toISOString().slice(0, 10);
+}
+function lotWeeklyProgramDay(value) {
+  const dateValue = lotWeeklyProgramDate(value);
+  return dateValue ? new Date(dateValue + 'T00:00:00Z').getUTCDay() : null;
+}
+function lotWeeklyProgramDayName(value) {
+  const dateValue = lotWeeklyProgramDate(value);
+  return dateValue
+    ? new Date(dateValue + 'T12:00:00Z').toLocaleDateString('es-GT', { weekday: 'long' })
+    : '';
+}
+function filterLotWeeklyPrograms(programs, farmFilter, weekFilter, dayFilter) {
+  const farmKey = normalizeLotWeeklyFarm(farmFilter);
+  const weekStart = lotWeeklyProgramWeekStart(weekFilter);
+  const day = String(dayFilter || '');
+  return (Array.isArray(programs) ? programs : [])
+    .filter(program =>
+      (!farmKey || normalizeLotWeeklyFarm(program.farm) === farmKey) &&
+      (!weekStart || String(program.week_start || '').slice(0, 10) === weekStart) &&
+      (!day || String(lotWeeklyProgramDay(program.scheduled_date)) === day)
+    )
+    .sort((a, b) =>
+      String(b.week_start || '').localeCompare(String(a.week_start || '')) ||
+      String(a.farm || '').localeCompare(String(b.farm || ''), 'es')
+    );
+}
+function lotWeeklyProgramWindow(referenceDate) {
+  const date = lotWeeklyProgramDate(referenceDate);
+  if (!date) return null;
+  return {
+    start: lotWeeklyProgramShiftDate(date, -LOT_WEEKLY_VISIT_WINDOW_DAYS),
+    end: lotWeeklyProgramShiftDate(date, LOT_WEEKLY_VISIT_WINDOW_DAYS)
+  };
+}
+function lotWeeklyProgramCandidates(plans, lotLookup, farm, scheduledDate, existingProgram) {
+  const date = lotWeeklyProgramDate(scheduledDate);
+  const normalizedFarm = normalizeLotWeeklyFarm(farm);
+  if (!date || !normalizedFarm) return [];
+  const savedReferences = new Map(
+    (Array.isArray(existingProgram && existingProgram.members) ? existingProgram.members : [])
+      .map(member => [normalizeVisitMapLotCode(member && member.lot_code), member && member.reference_date])
+  );
+  const seen = new Set();
+  return (Array.isArray(plans) ? plans : []).reduce((candidates, plan) => {
+    const lotCode = normalizeVisitMapLotCode(plan && plan.lot_code);
+    const lot = lotLookup && lotLookup[lotCode] || {};
+    const referenceDate = lotWeeklyProgramDate(savedReferences.get(lotCode) || plan && plan.cycle_date);
+    const window = lotWeeklyProgramWindow(referenceDate);
+    const planFarm = lot.finca || plan && plan.finca || '';
+    if (!lotCode || seen.has(lotCode) || !window ||
+        normalizeLotWeeklyFarm(planFarm) !== normalizedFarm ||
+        date < window.start || date > window.end) return candidates;
+    seen.add(lotCode);
+    candidates.push({
+      lotCode,
+      farm: planFarm,
+      referenceDate,
+      allowedStart: window.start,
+      allowedEnd: window.end
+    });
+    return candidates;
+  }, []).sort((a, b) => a.lotCode.localeCompare(b.lotCode));
+}
+function lotWeeklyProgramDateBounds(program) {
+  const weekStart = lotWeeklyProgramDate(program && program.week_start);
+  const members = Array.isArray(program && program.members) ? program.members : [];
+  if (!weekStart) return null;
+  const windows = members.map(member => lotWeeklyProgramWindow(member && member.reference_date));
+  if (windows.some(window => !window)) return null;
+  const weekEnd = lotWeeklyProgramShiftDate(weekStart, 6);
+  const protectedStart = lotWeeklyProgramDate(program && program.protected_date_start);
+  const protectedEnd = lotWeeklyProgramDate(program && program.protected_date_end);
+  const allowedStart = windows.reduce((latest, window) => window.start > latest ? window.start : latest,
+    protectedStart && protectedStart > weekStart ? protectedStart : weekStart);
+  const allowedEnd = windows.reduce((earliest, window) => window.end < earliest ? window.end : earliest,
+    protectedEnd && protectedEnd < weekEnd ? protectedEnd : weekEnd);
+  return { start: allowedStart, end: allowedEnd, valid: allowedStart <= allowedEnd };
+}
 function visitMapControlPercent(value) {
   if (typeof value !== 'number' && typeof value !== 'string') return null;
   const normalized = typeof value === 'string' ? value.trim().replace(/%$/, '').trim().replace(',', '.') : value;
@@ -3229,11 +3515,22 @@ function setLotFollowupStatus(message, kind) {
 function clearLotFollowupData() {
   state.lotFollowupPlans = [];
   state.lotFollowupVisits = [];
+  state.lotWeeklyPrograms = [];
   state.lotFollowupLoadPromise = null;
   state.editingLotFollowup = null;
+  state.editingLotWeeklyProgramId = null;
+  state.lotWeeklyProgramDraftKey = '';
+  state.lotWeeklyProgramDraftLotCodes = [];
   $('#lot-followup-summary').innerHTML = '';
   $('#lot-followup-rows').innerHTML = '<tr><td colspan="8" class="lot-followup-empty">Carga los planes para consultar el seguimiento.</td></tr>';
   $('#lot-followup-lot-options').innerHTML = '';
+  $('#lot-weekly-program-farm').innerHTML = '<option value="">Selecciona una finca</option>';
+  $('#lot-weekly-filter-farm').innerHTML = '<option value="">Todas las fincas</option>';
+  $('#lot-weekly-program-list').innerHTML = '<p class="lot-followup-empty">Carga los programas semanales para consultarlos.</p>';
+  $('#lot-weekly-program-candidates').innerHTML = '<p class="lot-followup-empty">Selecciona una finca y fecha para consultar los lotes elegibles.</p>';
+  $('#lot-weekly-program-date-summary').textContent = 'Elige una finca y una fecha para ver la semana y el día programados.';
+  $('#lot-weekly-filter-week').value = '';
+  $('#lot-weekly-filter-day').value = '';
   setLotFollowupStatus('', '');
 }
 function addLotFollowupDateInput(value) {
@@ -3269,9 +3566,150 @@ function renderLotFollowupLotOptions() {
     return '<option value="' + esc(lotCode) + '">' + esc(lot.finca || '') + '</option>';
   });
   $('#lot-followup-lot-options').innerHTML = options.join('');
+  renderLotWeeklyFarmOptions();
 }
-function normalizeLotFarmLabel(value) {
-  return String(value || '').trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').toLowerCase();
+function renderLotWeeklyFarmOptions() {
+  const farms = new Map();
+  Object.values(state.lotLookup).forEach(lot => {
+    const farm = String(lot && lot.finca || '').trim();
+    const key = normalizeLotWeeklyFarm(farm);
+    if (key && !farms.has(key)) farms.set(key, farm);
+  });
+  const options = [...farms.values()].sort((a, b) => a.localeCompare(b, 'es'));
+  const farmSelect = $('#lot-weekly-program-farm');
+  const filterSelect = $('#lot-weekly-filter-farm');
+  const currentFarm = farmSelect.value;
+  const currentFilter = filterSelect.value;
+  farmSelect.innerHTML = '<option value="">Selecciona una finca</option>' +
+    options.map(farm => '<option value="' + esc(farm) + '">' + esc(farm) + '</option>').join('');
+  filterSelect.innerHTML = '<option value="">Todas las fincas</option>' +
+    options.map(farm => '<option value="' + esc(farm) + '">' + esc(farm) + '</option>').join('');
+  if (options.includes(currentFarm)) farmSelect.value = currentFarm;
+  if (options.includes(currentFilter)) filterSelect.value = currentFilter;
+}
+function lotWeeklyProgramMemberCodes(program) {
+  return (Array.isArray(program && program.members) ? program.members : [])
+    .map(member => normalizeVisitMapLotCode(member && member.lot_code))
+    .filter(Boolean);
+}
+function resetLotWeeklyProgramForm() {
+  $('#lot-weekly-program-form').reset();
+  $('#lot-weekly-program-farm').value = '';
+  $('#lot-weekly-program-date').value = localDate();
+  state.editingLotWeeklyProgramId = null;
+  state.lotWeeklyProgramDraftKey = '';
+  state.lotWeeklyProgramDraftLotCodes = [];
+  $('#lot-weekly-program-title').textContent = 'Crear programa semanal';
+  $('#lot-weekly-program-save').textContent = 'Guardar programa';
+  $('#lot-weekly-program-cancel').hidden = true;
+  renderLotWeeklyProgramCandidates();
+}
+function updateLotWeeklyProgramDateBounds() {
+  const dateInput = $('#lot-weekly-program-date');
+  const weekStart = lotWeeklyProgramWeekStart(dateInput.value);
+  if (!state.editingLotWeeklyProgramId || !weekStart) {
+    dateInput.removeAttribute('min');
+    dateInput.removeAttribute('max');
+    return;
+  }
+  const selectedCodes = new Set($$('[data-lot-weekly-lot]:checked', $('#lot-weekly-program-candidates'))
+    .map(input => normalizeVisitMapLotCode(input.value)));
+  const program = state.lotWeeklyPrograms.find(item => item.id === state.editingLotWeeklyProgramId);
+  const candidates = lotWeeklyProgramCandidates(
+    state.lotFollowupPlans,
+    state.lotLookup,
+    $('#lot-weekly-program-farm').value,
+    dateInput.value,
+    program
+  );
+  const members = candidates
+    .filter(candidate => selectedCodes.has(candidate.lotCode))
+    .map(candidate => ({ reference_date: candidate.referenceDate }));
+  const bounds = lotWeeklyProgramDateBounds({
+    week_start: weekStart,
+    members,
+    protected_date_start: program && program.protected_date_start,
+    protected_date_end: program && program.protected_date_end
+  });
+  if (!bounds || !bounds.valid) {
+    dateInput.removeAttribute('min');
+    dateInput.removeAttribute('max');
+    return;
+  }
+  dateInput.min = bounds.start;
+  dateInput.max = bounds.end;
+}
+function renderLotWeeklyProgramCandidates() {
+  const farm = $('#lot-weekly-program-farm').value.trim();
+  const scheduledDate = lotWeeklyProgramDate($('#lot-weekly-program-date').value);
+  const summary = $('#lot-weekly-program-date-summary');
+  const target = $('#lot-weekly-program-candidates');
+  const saveButton = $('#lot-weekly-program-save');
+  if (!farm || !scheduledDate) {
+    state.editingLotWeeklyProgramId = null;
+    state.lotWeeklyProgramDraftKey = '';
+    state.lotWeeklyProgramDraftLotCodes = [];
+    $('#lot-weekly-program-title').textContent = 'Crear programa semanal';
+    $('#lot-weekly-program-save').textContent = 'Guardar programa';
+    $('#lot-weekly-program-cancel').hidden = true;
+    $('#lot-weekly-program-date').disabled = false;
+    summary.textContent = 'Elige una finca y una fecha para ver la semana y el día programados.';
+    target.innerHTML = '<p class="lot-followup-empty">Selecciona una finca y fecha para consultar los lotes elegibles.</p>';
+    saveButton.disabled = true;
+    updateLotWeeklyProgramDateBounds();
+    return;
+  }
+  const weekStart = lotWeeklyProgramWeekStart(scheduledDate);
+  const weekEnd = lotWeeklyProgramShiftDate(weekStart, 6);
+  const dayName = lotWeeklyProgramDayName(scheduledDate);
+  const programKey = normalizeLotWeeklyFarm(farm) + '|' + weekStart;
+  const existing = state.lotWeeklyPrograms.find(program =>
+    normalizeLotWeeklyFarm(program.farm) === normalizeLotWeeklyFarm(farm) &&
+    String(program.week_start || '').slice(0, 10) === weekStart
+  );
+  $('#lot-weekly-program-date').disabled = !!existing && existing.can_update_date === false;
+  const candidates = lotWeeklyProgramCandidates(state.lotFollowupPlans, state.lotLookup, farm, scheduledDate, existing);
+  if (state.lotWeeklyProgramDraftKey !== programKey ||
+      (existing && state.editingLotWeeklyProgramId !== existing.id) ||
+      (!existing && state.editingLotWeeklyProgramId)) {
+    state.lotWeeklyProgramDraftKey = programKey;
+    state.editingLotWeeklyProgramId = existing ? existing.id : null;
+    state.lotWeeklyProgramDraftLotCodes = existing
+      ? lotWeeklyProgramMemberCodes(existing)
+      : candidates.map(candidate => candidate.lotCode);
+  }
+  const selectedCodes = new Set(state.lotWeeklyProgramDraftLotCodes);
+  const eligibleCodes = new Set(candidates.map(candidate => candidate.lotCode));
+  const invalidSelected = [...selectedCodes].filter(lotCode => !eligibleCodes.has(lotCode));
+  const title = existing
+    ? 'Editar programa · ' + farm + ' · semana del ' + formatDate(weekStart)
+    : 'Crear programa semanal';
+  $('#lot-weekly-program-title').textContent = title;
+  $('#lot-weekly-program-save').textContent = existing ? 'Guardar cambios' : 'Guardar programa';
+  $('#lot-weekly-program-cancel').hidden = !existing;
+  summary.textContent = 'Fecha común: ' + formatDate(scheduledDate) + ' · Día: ' +
+    dayName.charAt(0).toLocaleUpperCase('es-GT') + dayName.slice(1) +
+    ' · Semana: ' + formatDate(weekStart) + ' a ' + formatDate(weekEnd) +
+    (existing && existing.can_update_date === false ? ' · La fecha está bloqueada por lotes de zonas no asignadas.' : '');
+  const candidateRows = candidates.map(candidate =>
+    '<label class="lot-weekly-candidate">' +
+      '<input type="checkbox" data-lot-weekly-lot value="' + esc(candidate.lotCode) + '"' +
+        (selectedCodes.has(candidate.lotCode) ? ' checked' : '') + '>' +
+      '<span><strong>Lote ' + esc(candidate.lotCode) + '</strong><small>Fecha de referencia: ' +
+        esc(formatDate(candidate.referenceDate)) + '</small></span>' +
+      '<span><small>Rango permitido: ' + esc(formatDate(candidate.allowedStart)) + ' a ' +
+        esc(formatDate(candidate.allowedEnd)) + '</small></span>' +
+    '</label>'
+  );
+  const warning = invalidSelected.length
+    ? '<p class="field-hint">Algunos lotes del programa existente quedan fuera del rango para esta fecha y no se incluirán: ' +
+      esc(invalidSelected.join(', ')) + '.</p>'
+    : '';
+  target.innerHTML = warning + (candidateRows.length
+    ? candidateRows.join('')
+    : '<p class="lot-followup-empty">No hay lotes de esta finca cuyo rango de ±5 días incluya la fecha elegida.</p>');
+  saveButton.disabled = !candidates.some(candidate => selectedCodes.has(candidate.lotCode));
+  updateLotWeeklyProgramDateBounds();
 }
 function renderLotFollowup() {
   if (!canAccessLotFollowup()) return;
@@ -3339,6 +3777,73 @@ function renderLotFollowup() {
   $('#lot-followup-rows').innerHTML = rows.length
     ? rows.join('')
     : '<tr><td colspan="8" class="lot-followup-empty">' + (plans.length ? 'No hay lotes que coincidan con el filtro.' : 'Todavía no hay planes de seguimiento cargados.') + '</td></tr>';
+  renderLotWeeklyPrograms();
+}
+function renderLotWeeklyPrograms() {
+  const programs = filterLotWeeklyPrograms(
+    state.lotWeeklyPrograms,
+    $('#lot-weekly-filter-farm').value,
+    $('#lot-weekly-filter-week').value,
+    $('#lot-weekly-filter-day').value
+  );
+  const cards = programs.map(program => {
+    const weekStart = lotWeeklyProgramDate(program.week_start);
+    const weekEnd = lotWeeklyProgramShiftDate(weekStart, 6);
+    const scheduledDate = lotWeeklyProgramDate(program.scheduled_date);
+    const dayName = lotWeeklyProgramDayName(scheduledDate);
+    const bounds = lotWeeklyProgramDateBounds(program);
+    const canChangeDate = program.can_update_date !== false;
+    const members = (Array.isArray(program.members) ? program.members : [])
+      .slice()
+      .sort((a, b) => String(a.lot_code || '').localeCompare(String(b.lot_code || '')));
+    const memberRows = members.map(member => {
+      const referenceDate = lotWeeklyProgramDate(member.reference_date);
+      const window = lotWeeklyProgramWindow(referenceDate);
+      return '<tr>' +
+        '<td><strong>Lote ' + esc(member.lot_code || '') + '</strong></td>' +
+        '<td>' + esc(referenceDate ? formatDate(referenceDate) : 'Sin fecha') + '</td>' +
+        '<td>' + (window
+          ? esc(formatDate(window.start) + ' a ' + formatDate(window.end))
+          : 'Sin rango disponible') + '</td>' +
+        '<td>' + esc(dayName.charAt(0).toLocaleUpperCase('es-GT') + dayName.slice(1) + ' · ' + formatDate(scheduledDate)) + '</td>' +
+      '</tr>';
+    });
+    const dateEditor = bounds && bounds.valid
+      ? '<div class="lot-weekly-program-date-editor">' +
+          '<label class="field"><span class="field-label">Ajustar fecha programada</span>' +
+            '<input class="text-input" type="date" data-lot-weekly-date="' + esc(program.id) + '" value="' +
+              esc(scheduledDate) + '" min="' + esc(bounds.start) + '" max="' + esc(bounds.end) + '"' +
+              (canChangeDate ? '' : ' disabled') + ' required></label>' +
+          '<button class="secondary-button" type="button" data-lot-weekly-date-save="' + esc(program.id) + '"' +
+            (canChangeDate ? '' : ' disabled') + '>Guardar fecha</button>' +
+        '</div>'
+      : '<p class="field-hint">No existe una fecha común válida para todos los lotes de este programa.</p>';
+    const hiddenMemberNote = program.can_delete === false
+      ? '<p class="field-hint">El programa incluye lotes de zonas no asignadas. Sus datos no se muestran; no puedes cambiar su fecha ni eliminarlo.</p>'
+      : '';
+    return '<article class="lot-weekly-program-card">' +
+      '<div class="lot-weekly-program-heading"><div><h3>' + esc(program.farm || 'Sin finca') + '</h3>' +
+        '<p>Semana: ' + esc(formatDate(weekStart)) + ' a ' + esc(formatDate(weekEnd)) +
+          ' · Día común: <strong>' + esc(dayName.charAt(0).toLocaleUpperCase('es-GT') + dayName.slice(1)) +
+          '</strong> · Fecha: ' + esc(formatDate(scheduledDate)) + ' · Lotes en tus zonas: ' + members.length + '</p></div>' +
+        '<div class="lot-weekly-program-actions">' +
+          '<button class="record-view-button" type="button" data-lot-weekly-edit="' + esc(program.id) + '">Editar lotes</button>' +
+          '<button class="record-view-button" type="button" data-lot-weekly-delete="' + esc(program.id) + '"' +
+            (program.can_delete === false ? ' disabled title="Incluye lotes fuera de tus zonas asignadas"' : '') +
+            '>Eliminar programa</button>' +
+        '</div></div>' +
+      hiddenMemberNote +
+      dateEditor +
+      '<div class="lot-weekly-program-table-wrap"><table class="lot-weekly-program-table">' +
+        '<thead><tr><th>Lote</th><th>Fecha de referencia</th><th>Rango permitido ±5 días</th><th>Día y fecha programados</th></tr></thead>' +
+        '<tbody>' + memberRows.join('') + '</tbody></table></div>' +
+    '</article>';
+  });
+  $('#lot-weekly-program-list').innerHTML = cards.length
+    ? cards.join('')
+    : '<p class="lot-followup-empty">' + (state.lotWeeklyPrograms.length
+      ? 'No hay programas que coincidan con los filtros.'
+      : 'Todavía no hay programas semanales cargados.') + '</p>';
 }
 async function fetchAllLotFollowupPlans() {
   const plans = [];
@@ -3347,6 +3852,18 @@ async function fetchAllLotFollowupPlans() {
     if (!Array.isArray(page)) throw new Error('Supabase devolvió una lista de planes no válida.');
     plans.push(...page);
     if (page.length < 1000) return plans;
+  }
+}
+async function fetchAllLotWeeklyPrograms() {
+  const programs = [];
+  for (let offset = 0, page; ; offset += 1000) {
+    page = await cloudRequest('rpc/get_lot_weekly_visit_programs?select=id,farm,week_start,scheduled_date,members,protected_date_start,protected_date_end,can_update_date,can_delete&order=week_start.desc,farm.asc&limit=1000&offset=' + offset, {
+      method: 'POST',
+      body: {}
+    });
+    if (!Array.isArray(page)) throw new Error('Supabase devolvió una lista de programas semanales no válida.');
+    programs.push(...page);
+    if (page.length < 1000) return programs;
   }
 }
 async function fetchAllLotFollowupVisits() {
@@ -3364,22 +3881,27 @@ async function fetchAllLotFollowupVisits() {
 async function loadLotFollowup() {
   if (!canAccessLotFollowup()) return;
   if (!state.configured) {
-    setLotFollowupStatus('Configura Supabase y aplica la migración de seguimiento para usar este módulo.', 'warning');
+    setLotFollowupStatus('Configura Supabase y aplica las migraciones de seguimiento para usar este módulo.', 'warning');
     return;
   }
   if (!navigator.onLine) {
-    setLotFollowupStatus('Conéctate a internet para consultar los planes y las visitas compartidas.', 'warning');
+    setLotFollowupStatus('Conéctate a internet para consultar los planes, las visitas y los programas semanales compartidos.', 'warning');
     return;
   }
   if (state.lotFollowupLoadPromise) return state.lotFollowupLoadPromise;
   const userId = state.user.id;
   const request = (async () => {
-    setLotFollowupStatus('Consultando planes y capturas de Malezas…', 'info');
+    setLotFollowupStatus('Consultando planes, visitas y programas semanales…', 'info');
     await loadLotLookup();
-    const [plans, visits] = await Promise.all([fetchAllLotFollowupPlans(), fetchAllLotFollowupVisits()]);
+    const [plans, visits, programs] = await Promise.all([
+      fetchAllLotFollowupPlans(),
+      fetchAllLotFollowupVisits(),
+      fetchAllLotWeeklyPrograms()
+    ]);
     if (!state.user || state.user.id !== userId) return;
     state.lotFollowupPlans = plans;
     state.lotFollowupVisits = visits;
+    state.lotWeeklyPrograms = programs;
     renderLotFollowupLotOptions();
     renderLotFollowup();
   })();
@@ -3392,6 +3914,102 @@ async function loadLotFollowup() {
   } finally {
     if (state.lotFollowupLoadPromise === request) state.lotFollowupLoadPromise = null;
   }
+}
+function editLotWeeklyProgram(programId) {
+  if (!canAccessLotFollowup()) return;
+  const program = state.lotWeeklyPrograms.find(item => String(item.id) === String(programId));
+  if (!program) {
+    setLotFollowupStatus('No se encontró el programa semanal que intentas editar. Actualiza la lista e inténtalo de nuevo.', 'warning');
+    return;
+  }
+  $('#lot-weekly-program-farm').value = program.farm;
+  $('#lot-weekly-program-date').value = lotWeeklyProgramDate(program.scheduled_date);
+  state.lotWeeklyProgramDraftKey = '';
+  renderLotWeeklyProgramCandidates();
+  setLotFollowupStatus('', '');
+  $('#lot-weekly-program-title').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+async function saveLotWeeklyProgram(event) {
+  event.preventDefault();
+  if (!canAccessLotFollowup()) throw new Error('Solo una cuenta administradora o supervisora activa puede gestionar este módulo.');
+  if (!state.configured || !navigator.onLine) throw new Error('Conéctate a internet para guardar cambios en el espacio compartido.');
+  const form = $('#lot-weekly-program-form');
+  if (!form.reportValidity()) return;
+  const farm = $('#lot-weekly-program-farm').value.trim();
+  const scheduledDate = lotWeeklyProgramDate($('#lot-weekly-program-date').value);
+  const weekStart = lotWeeklyProgramWeekStart(scheduledDate);
+  const selectedCodes = $$('[data-lot-weekly-lot]:checked', $('#lot-weekly-program-candidates'))
+    .map(input => normalizeVisitMapLotCode(input.value));
+  if (!farm || !scheduledDate || !weekStart) throw new Error('Selecciona una finca y una fecha válida.');
+  if (!selectedCodes.length) throw new Error('Selecciona al menos un lote para el programa semanal.');
+  if (new Set(selectedCodes).size !== selectedCodes.length) throw new Error('No se puede incluir un lote más de una vez en el mismo programa.');
+  const existing = state.lotWeeklyPrograms.find(program =>
+    normalizeLotWeeklyFarm(program.farm) === normalizeLotWeeklyFarm(farm) &&
+    String(program.week_start || '').slice(0, 10) === weekStart
+  );
+  const candidates = lotWeeklyProgramCandidates(state.lotFollowupPlans, state.lotLookup, farm, scheduledDate, existing);
+  const candidatesByCode = new Map(candidates.map(candidate => [candidate.lotCode, candidate]));
+  const invalidCodes = selectedCodes.filter(lotCode => !candidatesByCode.has(lotCode));
+  if (invalidCodes.length) throw new Error('Estos lotes ya no son elegibles para la fecha elegida: ' + invalidCodes.join(', ') + '.');
+  const bounds = lotWeeklyProgramDateBounds({
+    week_start: weekStart,
+    members: selectedCodes.map(lotCode => ({ reference_date: candidatesByCode.get(lotCode).referenceDate })),
+    protected_date_start: existing && existing.protected_date_start,
+    protected_date_end: existing && existing.protected_date_end
+  });
+  if (!bounds || !bounds.valid || scheduledDate < bounds.start || scheduledDate > bounds.end) {
+    throw new Error('La fecha elegida debe estar dentro de la semana y del rango permitido para todos los lotes del programa.');
+  }
+  await cloudRequest('rpc/save_lot_weekly_visit_program', {
+    method: 'POST',
+    body: {
+      p_farm: farm,
+      p_week_start: weekStart,
+      p_scheduled_date: scheduledDate,
+      p_lot_codes: selectedCodes
+    }
+  });
+  await loadLotFollowup();
+  resetLotWeeklyProgramForm();
+  setLotFollowupStatus('Programa de ' + farm + ' guardado para el ' + formatDate(scheduledDate) + '.', 'success');
+  toast('Programa semanal guardado.');
+}
+async function saveLotWeeklyProgramDate(programId) {
+  if (!canAccessLotFollowup()) throw new Error('Solo una cuenta administradora o supervisora activa puede gestionar este módulo.');
+  if (!state.configured || !navigator.onLine) throw new Error('Conéctate a internet para guardar cambios en el espacio compartido.');
+  const program = state.lotWeeklyPrograms.find(item => String(item.id) === String(programId));
+  const dateInput = $$('[data-lot-weekly-date]').find(input => String(input.dataset.lotWeeklyDate) === String(programId));
+  if (!program || !dateInput) throw new Error('No se encontró el programa o su fecha. Actualiza la lista e inténtalo de nuevo.');
+  if (program.can_update_date === false) throw new Error('No puedes cambiar la fecha de un programa que incluye lotes de zonas no asignadas.');
+  const scheduledDate = lotWeeklyProgramDate(dateInput.value);
+  const bounds = lotWeeklyProgramDateBounds(program);
+  if (!scheduledDate || lotWeeklyProgramWeekStart(scheduledDate) !== String(program.week_start).slice(0, 10) ||
+      !bounds || !bounds.valid || scheduledDate < bounds.start || scheduledDate > bounds.end) {
+    throw new Error('La fecha debe permanecer dentro de la semana y del rango permitido para todos los lotes.');
+  }
+  await cloudRequest('rpc/update_lot_weekly_visit_program_date', {
+    method: 'POST',
+    body: { p_program_id: program.id, p_scheduled_date: scheduledDate }
+  });
+  await loadLotFollowup();
+  setLotFollowupStatus('Fecha del programa actualizada al ' + formatDate(scheduledDate) + '.', 'success');
+  toast('Fecha programada actualizada.');
+}
+async function deleteLotWeeklyProgram(programId) {
+  if (!canAccessLotFollowup()) throw new Error('Solo una cuenta administradora o supervisora activa puede gestionar este módulo.');
+  if (!state.configured || !navigator.onLine) throw new Error('Conéctate a internet para eliminar el programa compartido.');
+  const program = state.lotWeeklyPrograms.find(item => String(item.id) === String(programId));
+  if (!program) throw new Error('No se encontró el programa semanal. Actualiza la lista e inténtalo de nuevo.');
+  if (program.can_delete === false) throw new Error('No tienes acceso a todas las zonas con lotes de este programa y no puedes eliminarlo.');
+  if (!window.confirm('¿Eliminar el programa de ' + program.farm + ' para la semana del ' + formatDate(program.week_start) + '?')) return;
+  await cloudRequest('rpc/delete_lot_weekly_visit_program', {
+    method: 'POST',
+    body: { p_program_id: program.id }
+  });
+  if (String(state.editingLotWeeklyProgramId) === String(program.id)) resetLotWeeklyProgramForm();
+  await loadLotFollowup();
+  setLotFollowupStatus('Programa semanal eliminado.', 'success');
+  toast('Programa semanal eliminado.');
 }
 function editLotFollowup(lotCode) {
   if (!canAccessLotFollowup()) return;
@@ -3549,6 +4167,11 @@ function renderHome() {
   $('#invite-user-form').hidden = !isActiveAdmin();
   $('#create-user-form').hidden = !isActiveAdmin();
   resetLotFollowupForm();
+  renderLotWeeklyFarmOptions();
+  resetLotWeeklyProgramForm();
+  $('#lot-weekly-filter-farm').value = '';
+  $('#lot-weekly-filter-week').value = '';
+  $('#lot-weekly-filter-day').value = '';
   populateInviteRoles();
   populateCreateUserRoles();
   $('#home-subtitle').textContent = state.user.role === 'aereo' ? 'Captura vuelos y datos de apoyo para aplicaciones aéreas.' : state.user.role === 'terrestre' ? 'Captura calibraciones y labores de aplicación terrestre.' : state.user.role === 'supervisor' ? 'Revisa capturas y los apartados de Malezas y Calidad.' : 'Administra perfiles y revisa las capturas aéreas y terrestres.';
@@ -3819,6 +4442,34 @@ $('#capture-form').addEventListener('change', event => {
     updateFlightMetricsReadouts();
   }
   if (state.currentModule === 'malezas') updateWeedsDatesForInput(event.target);
+  if (state.currentModule === 'vuelos' && !state.editingRecord && event.target.name === 'labor') {
+    const laborInput = event.target;
+    const previousLabor = laborInput.dataset.activityLabor || '';
+    if (!laborInput.value) {
+      laborInput.value = previousLabor;
+      updateFlightMetricsReadouts();
+    } else {
+      const requestedLabor = laborInput.value;
+      const contextInput = $('[name="contexto_vuelos_id"]', $('#form-fields'));
+      setWorkContextStatus('vuelos', 'Actualizando la labor en los vuelos asociados...', false);
+      state.flightActivityLaborUpdatePromise = queueFlightActivityLaborUpdate(
+        contextInput && contextInput.value,
+        requestedLabor,
+        state.user.id,
+        state.user.username
+      ).then(result => {
+        if (!resolveFlightActivityLaborSelection(laborInput, requestedLabor, result)) return result;
+        if (!result || !result.ok) {
+          updateFlightMetricsReadouts();
+          saveWorkContextDraft('vuelos', false);
+          setWorkContextStatus('vuelos', 'No se pudo actualizar la labor de los vuelos asociados.', true);
+        } else {
+          setWorkContextStatus('vuelos', flightActivityLaborMessage(result), false);
+        }
+        return result;
+      });
+    }
+  }
   if (WORK_CONTEXT_MODULES.includes(state.currentModule)) saveWorkContextDraft(state.currentModule, false);
 });
 $('#form-fields').addEventListener('change', event => {
@@ -3833,6 +4484,10 @@ $('#capture-form').addEventListener('submit', async event => {
   const editing = state.editingRecord;
   const moduleKey = state.currentModule;
   const captureTime = captureTimestamp();
+  if (moduleKey === 'vuelos' && state.flightActivityLaborUpdatePromise) {
+    const activityLaborUpdate = await state.flightActivityLaborUpdatePromise;
+    if (!activityLaborUpdate || !activityLaborUpdate.ok) return;
+  }
   if (editing && editing.syncStatus === 'synced' && !navigator.onLine) {
     toast('Conéctate a internet para guardar cambios de una captura sincronizada.');
     return;
@@ -3886,6 +4541,16 @@ $('#capture-form').addEventListener('submit', async event => {
   }
   try {
     await putRecord(record);
+    let flightActivityLaborResult = null;
+    if (editing && moduleKey === 'vuelos') {
+      const ownerId = record.ownerId || (record.ownerUsername === state.user.username ? state.user.id : null);
+      flightActivityLaborResult = await queueFlightActivityLaborUpdate(
+        record.datos.contexto_vuelos_id,
+        record.datos.labor,
+        ownerId,
+        record.ownerUsername || state.user.username
+      );
+    }
     await refreshLists();
     if (!editing && moduleKey === 'vuelos') {
       clearFlightEntryFields($('#form-fields'));
@@ -3906,11 +4571,18 @@ $('#capture-form').addEventListener('submit', async event => {
     $('#capture-submit').textContent = 'Guardar captura';
     state.editingRecord = null;
     state.currentModule = null;
-    toast(!contextCleared
+    const savedMessage = !contextCleared
       ? 'Captura guardada, pero no se pudo borrar el contexto anterior de este dispositivo.'
       : editing
       ? editing.syncStatus === 'synced' ? 'Cambios guardados; la captura volvió a revisión pendiente.' : 'Cambios guardados en este dispositivo.'
-      : 'Guardado en este dispositivo.');
+      : 'Guardado en este dispositivo.';
+    toast(flightActivityLaborResult
+      ? flightActivityLaborResult.ok
+        ? flightActivityLaborResult.updated
+          ? 'Cambios guardados. ' + flightActivityLaborMessage(flightActivityLaborResult)
+          : savedMessage
+        : 'Captura guardada, pero no se pudo actualizar la labor de todos los vuelos de la actividad.'
+      : savedMessage);
     navigate(editing ? 'gestionar' : 'inicio');
     if (navigator.onLine) syncCloudRecords(false).catch(handleCloudError);
   } catch (error) {
@@ -4209,6 +4881,36 @@ $('#lot-followup-cancel-edit').addEventListener('click', () => {
 $('#lot-followup-refresh').addEventListener('click', () => loadLotFollowup().catch(handleLotFollowupError));
 $('#lot-followup-search').addEventListener('input', renderLotFollowup);
 $('#lot-followup-filter').addEventListener('change', renderLotFollowup);
+$('#lot-weekly-program-form').addEventListener('submit', event => {
+  saveLotWeeklyProgram(event).catch(handleLotFollowupError);
+});
+$('#lot-weekly-program-farm').addEventListener('change', renderLotWeeklyProgramCandidates);
+$('#lot-weekly-program-date').addEventListener('change', renderLotWeeklyProgramCandidates);
+$('#lot-weekly-program-candidates').addEventListener('change', () => {
+  state.lotWeeklyProgramDraftLotCodes = $$('[data-lot-weekly-lot]:checked', $('#lot-weekly-program-candidates'))
+    .map(input => normalizeVisitMapLotCode(input.value));
+  renderLotWeeklyProgramCandidates();
+});
+$('#lot-weekly-program-cancel').addEventListener('click', () => {
+  resetLotWeeklyProgramForm();
+  setLotFollowupStatus('', '');
+});
+$('#lot-weekly-filter-farm').addEventListener('change', renderLotWeeklyPrograms);
+$('#lot-weekly-filter-week').addEventListener('change', renderLotWeeklyPrograms);
+$('#lot-weekly-filter-day').addEventListener('change', renderLotWeeklyPrograms);
+$('#lot-weekly-program-refresh').addEventListener('click', () => loadLotFollowup().catch(handleLotFollowupError));
+$('#lot-weekly-program-list').addEventListener('click', event => {
+  const editButton = event.target.closest('[data-lot-weekly-edit]');
+  const dateButton = event.target.closest('[data-lot-weekly-date-save]');
+  const deleteButton = event.target.closest('[data-lot-weekly-delete]');
+  if (editButton) {
+    editLotWeeklyProgram(editButton.dataset.lotWeeklyEdit);
+  } else if (dateButton) {
+    saveLotWeeklyProgramDate(dateButton.dataset.lotWeeklyDateSave).catch(handleLotFollowupError);
+  } else if (deleteButton) {
+    deleteLotWeeklyProgram(deleteButton.dataset.lotWeeklyDelete).catch(handleLotFollowupError);
+  }
+});
 $('#lot-followup-import').addEventListener('change', async event => {
   const input = event.currentTarget;
   const file = input.files && input.files[0];

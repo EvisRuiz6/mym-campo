@@ -185,31 +185,6 @@
             </form>
           </section>
 
-          <section class="form-section lot-weekly-programs-section">
-            <div class="section-heading">
-              <div><p class="eyebrow">AGENDA DE VISITAS</p><h2>Visitas pendientes y vencidas</h2></div>
-              <button class="secondary-button" data-goto="programacion-semanal" type="button">Programación semanal</button>
-            </div>
-            <div class="record-toolbar lot-weekly-toolbar">
-              <label class="field"><span class="field-label">Finca</span><select id="lot-weekly-filter-farm" class="select-input"><option value="">Todas las fincas</option></select></label>
-              <label class="field"><span class="field-label">Día programado</span>
-                <select id="lot-weekly-filter-day" class="select-input">
-                  <option value="">Todos los días</option>
-                  <option value="1">Lunes</option><option value="2">Martes</option><option value="3">Miércoles</option>
-                  <option value="4">Jueves</option><option value="5">Viernes</option><option value="6">Sábado</option>
-                </select>
-              </label>
-              <label class="field"><span class="field-label">Responsable</span>
-                <select id="lot-weekly-filter-responsible" class="select-input"><option value="">Todos los responsables</option></select>
-              </label>
-              <button id="lot-weekly-program-refresh" class="secondary-button" type="button">Actualizar</button>
-            </div>
-            <p class="record-query-hint">Agrupa por finca las visitas cuyas fechas originales estén a cinco días o menos. La fecha común asignada es la más antigua del grupo; cada fila conserva su fecha programada original. Las visitas vencidas se mantienen hasta que se registren como realizadas.</p>
-            <div id="lot-visit-agenda-list" class="lot-weekly-program-list">
-              <p class="lot-followup-empty">Carga los planes y las visitas para consultar los pendientes.</p>
-            </div>
-          </section>
-
           <div class="record-toolbar lot-followup-toolbar">
             <label class="search-field">⌕ <input id="lot-followup-search" type="search" placeholder="Buscar finca, lote o responsable" aria-label="Buscar planes por lote"></label>
             <select id="lot-followup-filter" class="select-input" aria-label="Filtrar estado del seguimiento">
@@ -242,9 +217,19 @@
           <div class="record-toolbar lot-weekly-toolbar">
             <label class="field"><span class="field-label">Semana de visita</span><input id="lot-weekly-schedule-filter-week" class="text-input" type="date" aria-label="Filtrar semana de visita"></label>
             <label class="field"><span class="field-label">Finca</span><select id="lot-weekly-schedule-filter-farm" class="select-input"><option value="">Todas las fincas</option></select></label>
+            <label class="field"><span class="field-label">Día programado</span>
+              <select id="lot-weekly-schedule-filter-day" class="select-input">
+                <option value="">Todos los días</option>
+                <option value="1">Lunes</option><option value="2">Martes</option><option value="3">Miércoles</option>
+                <option value="4">Jueves</option><option value="5">Viernes</option><option value="6">Sábado</option>
+              </select>
+            </label>
+            <label class="field"><span class="field-label">Responsable</span>
+              <select id="lot-weekly-schedule-filter-responsible" class="select-input"><option value="">Todos los responsables</option></select>
+            </label>
             <button id="lot-weekly-schedule-refresh" class="secondary-button" type="button">Actualizar</button>
           </div>
-          <p class="record-query-hint">Los grupos se generan automáticamente por finca cuando la diferencia entre la fecha original más antigua y las demás fechas es de cinco días o menos. La fecha asignada es la más antigua; no se modifican las fechas originales del plan.</p>
+          <p class="record-query-hint">Los grupos se generan automáticamente por finca cuando la diferencia entre la fecha original más antigua y las demás fechas es de cinco días o menos. La fecha asignada es la más antigua; no se modifican las fechas originales del plan. Las visitas vencidas se muestran hasta que se registren como realizadas.</p>
           <div id="lot-weekly-program-list" class="lot-weekly-program-list">
             <p class="lot-followup-empty">Carga los planes y las visitas para consultar la programación semanal.</p>
           </div>
@@ -359,6 +344,6 @@
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </div>
   <script src="config.js"></script>
-  <script src="app.js?v=49"></script>
+  <script src="app.js?v=50"></script>
 </body>
 </html>

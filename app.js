@@ -3646,14 +3646,12 @@ function clearLotFollowupData() {
   $('#lot-followup-summary').innerHTML = '';
   $('#lot-followup-rows').innerHTML = '<tr><td colspan="8" class="lot-followup-empty">Carga los planes para consultar el seguimiento.</td></tr>';
   $('#lot-followup-lot-options').innerHTML = '';
-  $('#lot-weekly-filter-farm').innerHTML = '<option value="">Todas las fincas</option>';
   $('#lot-weekly-schedule-filter-farm').innerHTML = '<option value="">Todas las fincas</option>';
-  $('#lot-visit-agenda-list').innerHTML = '<p class="lot-followup-empty">Carga los planes y las visitas para consultar los pendientes.</p>';
   $('#lot-weekly-program-list').innerHTML = '<p class="lot-followup-empty">Carga los planes y las visitas para consultar los pendientes.</p>';
-  $('#lot-weekly-filter-day').value = '';
-  $('#lot-weekly-filter-responsible').value = '';
   $('#lot-weekly-schedule-filter-week').value = '';
   $('#lot-weekly-schedule-filter-farm').value = '';
+  $('#lot-weekly-schedule-filter-day').value = '';
+  $('#lot-weekly-schedule-filter-responsible').value = '';
   setLotFollowupStatus('', '');
 }
 function addLotFollowupDateInput(value) {
@@ -3699,13 +3697,11 @@ function renderLotWeeklyFarmOptions() {
     if (key && !farms.has(key)) farms.set(key, farm);
   });
   const options = [...farms.values()].sort((a, b) => a.localeCompare(b, 'es'));
-  for (const id of ['lot-weekly-filter-farm', 'lot-weekly-schedule-filter-farm']) {
-    const filterSelect = $('#' + id);
-    const currentFilter = filterSelect.value;
-    filterSelect.innerHTML = '<option value="">Todas las fincas</option>' +
-      options.map(farm => '<option value="' + esc(farm) + '">' + esc(farm) + '</option>').join('');
-    if (options.includes(currentFilter)) filterSelect.value = currentFilter;
-  }
+  const filterSelect = $('#lot-weekly-schedule-filter-farm');
+  const currentFilter = filterSelect.value;
+  filterSelect.innerHTML = '<option value="">Todas las fincas</option>' +
+    options.map(farm => '<option value="' + esc(farm) + '">' + esc(farm) + '</option>').join('');
+  if (options.includes(currentFilter)) filterSelect.value = currentFilter;
 }
 function lotWeeklyProgramMemberCodes(program) {
   return (Array.isArray(program && program.members) ? program.members : [])
@@ -3897,12 +3893,16 @@ function renderLotFollowup() {
   $('#lot-followup-rows').innerHTML = rows.length
     ? rows.join('')
     : '<tr><td colspan="8" class="lot-followup-empty">' + (plans.length ? 'No hay lotes que coincidan con el filtro.' : 'Todavía no hay planes de seguimiento cargados.') + '</td></tr>';
-  renderLotWeeklyPrograms();
   renderLotWeeklySchedule();
 }
-function renderLotWeeklyPrograms() {
-  const allVisits = buildLotWeeklyVisitItems(state.lotFollowupPlans, state.lotFollowupVisits, state.lotLookup, localDate());
-  const responsibleSelect = $('#lot-weekly-filter-responsible');
+function renderLotWeeklySchedule() {
+  const allVisits = buildLotWeeklyVisitItems(
+    state.lotFollowupPlans,
+    state.lotFollowupVisits,
+    state.lotLookup,
+    localDate()
+  );
+  const responsibleSelect = $('#lot-weekly-schedule-filter-responsible');
   const selectedResponsible = responsibleSelect.value;
   const responsibleOptions = new Map();
   allVisits.forEach(visit => {
@@ -3917,27 +3917,16 @@ function renderLotWeeklyPrograms() {
     responsible.toLocaleLowerCase() === selectedResponsible.trim().toLocaleLowerCase()
   );
   if (matchingResponsible) responsibleSelect.value = matchingResponsible;
-  const groups = filterLotWeeklyVisitGroups(
+  const weekGroups = filterWeeklyScheduleGroups(
     groupLotWeeklyVisits(allVisits),
-    $('#lot-weekly-filter-farm').value,
-    $('#lot-weekly-filter-day').value,
-    responsibleSelect.value
-  );
-  $('#lot-visit-agenda-list').innerHTML = groups.length
-    ? groups.map(lotWeeklyVisitGroupCard).join('')
-    : '<p class="lot-followup-empty">No hay visitas pendientes ni vencidas para los filtros seleccionados.</p>';
-}
-function renderLotWeeklySchedule() {
-  const allGroups = groupLotWeeklyVisits(buildLotWeeklyVisitItems(
-    state.lotFollowupPlans,
-    state.lotFollowupVisits,
-    state.lotLookup,
-    localDate()
-  ));
-  const groups = filterWeeklyScheduleGroups(
-    allGroups,
     $('#lot-weekly-schedule-filter-farm').value,
     $('#lot-weekly-schedule-filter-week').value
+  );
+  const groups = filterLotWeeklyVisitGroups(
+    weekGroups,
+    '',
+    $('#lot-weekly-schedule-filter-day').value,
+    responsibleSelect.value
   );
   const weeks = new Map();
   groups.forEach(group => {
@@ -4275,11 +4264,10 @@ function renderHome() {
   $('#create-user-form').hidden = !isActiveAdmin();
   resetLotFollowupForm();
   renderLotWeeklyFarmOptions();
-  $('#lot-weekly-filter-farm').value = '';
-  $('#lot-weekly-filter-day').value = '';
-  $('#lot-weekly-filter-responsible').value = '';
   $('#lot-weekly-schedule-filter-farm').value = '';
   $('#lot-weekly-schedule-filter-week').value = '';
+  $('#lot-weekly-schedule-filter-day').value = '';
+  $('#lot-weekly-schedule-filter-responsible').value = '';
   populateInviteRoles();
   populateCreateUserRoles();
   $('#home-subtitle').textContent = state.user.role === 'aereo' ? 'Captura vuelos y datos de apoyo para aplicaciones aéreas.' : state.user.role === 'terrestre' ? 'Captura calibraciones y labores de aplicación terrestre.' : state.user.role === 'supervisor' ? 'Revisa capturas y los apartados de Malezas y Calidad.' : 'Administra perfiles y revisa las capturas aéreas y terrestres.';
@@ -4991,12 +4979,10 @@ $('#lot-followup-cancel-edit').addEventListener('click', () => {
 $('#lot-followup-refresh').addEventListener('click', () => loadLotFollowup().catch(handleLotFollowupError));
 $('#lot-followup-search').addEventListener('input', renderLotFollowup);
 $('#lot-followup-filter').addEventListener('change', renderLotFollowup);
-$('#lot-weekly-filter-farm').addEventListener('change', renderLotWeeklyPrograms);
-$('#lot-weekly-filter-day').addEventListener('change', renderLotWeeklyPrograms);
-$('#lot-weekly-filter-responsible').addEventListener('change', renderLotWeeklyPrograms);
-$('#lot-weekly-program-refresh').addEventListener('click', () => loadLotFollowup().catch(handleLotFollowupError));
 $('#lot-weekly-schedule-filter-farm').addEventListener('change', renderLotWeeklySchedule);
 $('#lot-weekly-schedule-filter-week').addEventListener('change', renderLotWeeklySchedule);
+$('#lot-weekly-schedule-filter-day').addEventListener('change', renderLotWeeklySchedule);
+$('#lot-weekly-schedule-filter-responsible').addEventListener('change', renderLotWeeklySchedule);
 $('#lot-weekly-schedule-refresh').addEventListener('click', () => loadLotFollowup().catch(handleLotFollowupError));
 $('#lot-followup-import').addEventListener('change', async event => {
   const input = event.currentTarget;

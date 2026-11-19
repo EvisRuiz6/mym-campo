@@ -12,7 +12,8 @@ const helpers = runInNewContext(
   appSource.slice(helperStart, helperEnd) +
   '\n({ parseXlsxWorkbook, parseLotFollowupRows, excelDateToIso, evaluateLotFollowup, ' +
   'lotWeeklyProgramWeekStart, lotWeeklyProgramDay, filterLotWeeklyPrograms, ' +
-  'lotWeeklyProgramCandidates, lotWeeklyProgramDateBounds, buildLotWeeklyVisitItems, filterLotWeeklyVisits })',
+  'lotWeeklyProgramCandidates, lotWeeklyProgramDateBounds, buildLotWeeklyVisitItems, filterLotWeeklyVisits, ' +
+  'groupLotWeeklyVisits, filterLotWeeklyVisitGroups, filterWeeklyScheduleGroups })',
   { Blob, Response, TextDecoder, DecompressionStream }
 );
 
@@ -281,5 +282,40 @@ test('weekly agenda includes overdue and pending first-three visits but excludes
       item.lotCode, item.scheduledDate, item.responsible
     ]))),
     [['0000002', '2026-11-17', 'Ana']]
+  );
+});
+
+test('groups same-farm visits within five days, assigns the earliest date, and keeps groups chronological', () => {
+  const groups = helpers.groupLotWeeklyVisits([
+    { farm: 'Finca A', lotCode: '1', visitNumber: 1, scheduledDate: '2026-03-10', responsible: 'Ana', day: 2, status: 'Vencida' },
+    { farm: 'Finca A', lotCode: '2', visitNumber: 1, scheduledDate: '2026-03-15', responsible: 'Luis', day: 0, status: 'Pendiente' },
+    { farm: 'Finca A', lotCode: '3', visitNumber: 1, scheduledDate: '2026-03-21', responsible: 'Ana', day: 6, status: 'Pendiente' },
+    { farm: 'Finca B', lotCode: '4', visitNumber: 1, scheduledDate: '2026-03-11', responsible: 'Ana', day: 3, status: 'Pendiente' }
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(groups.map(group => [
+    group.farm,
+    group.assignedDate,
+    group.weekStart,
+    group.visits.map(visit => visit.scheduledDate)
+  ]))), [
+    ['Finca A', '2026-03-10', '2026-03-09', ['2026-03-10', '2026-03-15']],
+    ['Finca B', '2026-03-11', '2026-03-09', ['2026-03-11']],
+    ['Finca A', '2026-03-21', '2026-03-16', ['2026-03-21']]
+  ]);
+});
+
+test('agenda and weekly filters retain group date assignments and chronological order', () => {
+  const groups = helpers.groupLotWeeklyVisits([
+    { farm: 'Finca A', lotCode: '1', visitNumber: 1, scheduledDate: '2026-03-10', responsible: 'Ana', day: 2 },
+    { farm: 'Finca A', lotCode: '2', visitNumber: 1, scheduledDate: '2026-03-13', responsible: 'Luis', day: 5 },
+    { farm: 'Finca B', lotCode: '3', visitNumber: 1, scheduledDate: '2026-03-11', responsible: 'Ana', day: 3 }
+  ]);
+  const agenda = helpers.filterLotWeeklyVisitGroups(groups, 'Finca A', '2', 'Luis');
+  assert.deepEqual(JSON.parse(JSON.stringify(agenda.map(group => [
+    group.assignedDate, group.visits.map(visit => visit.lotCode)
+  ]))), [['2026-03-10', ['2']]]);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(helpers.filterWeeklyScheduleGroups(groups, '', '2026-03-12').map(group => group.farm))),
+    ['Finca A', 'Finca B']
   );
 });

@@ -279,15 +279,16 @@
     <dialog id="weekly-capture-dialog" class="record-detail-dialog" aria-labelledby="weekly-capture-title">
       <div class="record-detail-card">
         <div class="record-detail-heading">
-          <div><p class="eyebrow">VISITAS SEMANALES · MALEZAS</p><h2 id="weekly-capture-title">Capturar visita</h2></div>
+          <div><p class="eyebrow">VISITAS SEMANALES · MALEZAS</p><h2 id="weekly-capture-title">Capturar visitas del día</h2></div>
           <button type="button" class="record-detail-close" id="weekly-capture-close" aria-label="Cerrar">×</button>
         </div>
         <p id="weekly-capture-summary" class="record-detail-summary"></p>
-        <p class="field-hint">Esta captura requiere conexión y se guarda directamente en el espacio compartido.</p>
+        <p class="field-hint">Completa los datos de cada lote. El borrador, incluidas las imágenes, se conserva en este dispositivo si cierras el formulario.</p>
+        <p id="weekly-capture-draft-status" class="field-hint" role="status" aria-live="polite"></p>
         <form id="weekly-capture-form" class="capture-form" novalidate>
           <div id="weekly-capture-fields"></div>
           <p id="weekly-capture-error" class="auth-error" role="alert" hidden></p>
-          <div class="form-actions"><button type="button" class="secondary-button" id="weekly-capture-cancel">Cancelar</button><button type="submit" class="primary-button" id="weekly-capture-submit">Guardar visita</button></div>
+          <div class="form-actions"><button type="button" class="secondary-button" id="weekly-capture-cancel">Cerrar y guardar borrador</button><button type="submit" class="primary-button" id="weekly-capture-submit">Guardar todas las visitas</button></div>
         </form>
       </div>
     </dialog>
@@ -359,6 +360,6 @@
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </div>
   <script src="config.js"></script>
-  <script src="app.js?v=51"></script>
+  <script src="app.js?v=52"></script>
 </body>
 </html>

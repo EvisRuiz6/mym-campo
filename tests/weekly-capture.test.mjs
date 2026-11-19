@@ -15,58 +15,82 @@ function harness(request) {
     '#weekly-capture-submit': { disabled: false },
     '#weekly-capture-close': { disabled: false },
     '#weekly-capture-cancel': { disabled: false },
-    '#weekly-capture-dialog': { closed: false, close() { this.closed = true; } }
+    '#weekly-capture-dialog': { closed: false, close() { this.closed = true; } },
+    '#weekly-capture-fields': {}
   };
   const calls = [];
   const form = { reportValidity: () => true };
+  const rows = [{ querySelector: () => ({ value: '2026-03-01' }) }, { querySelector: () => ({ value: '2026-03-02' }) }];
   const context = runInNewContext(saveSource, {
-    $: selector => controls[selector],
+    $: (selector, root) => {
+      if (selector === '[data-repeat-list="malezas_detalle"]') return {};
+      if (controls[selector]) return controls[selector];
+      return root && root.querySelector ? root.querySelector(selector) : undefined;
+    },
+    $$: () => rows,
     navigator: { onLine: true },
     state: { configured: true },
-    serializeForm: async () => ({ subregistros: { malezas_detalle: [{ LOTE: '0000017' }] } }),
+    serializeForm: async () => ({
+      ID: 'record-1',
+      subregistros: { malezas_detalle: [{ LOTE: '0000017' }, { LOTE: '0000018' }] }
+    }),
     cloudRequest: async (path, options) => { calls.push({ path, options }); return request(); },
     loadLotFollowup: async () => {},
     syncCloudRecords: async () => {},
+    flushWeeklyCaptureDraft: async () => {},
+    deleteWeeklyVisitDraft: async () => {},
     toast: () => {},
     handleLotFollowupError: () => {},
     setLotFollowupStatus: () => {}
   });
   context.setCapture({
-    lotCode: '0000017', number: 3, cycleDate: '2026-01-01', scheduledDate: '2026-03-01',
-    recordId: 'record-id', finca: 'Finca A', time: { horaRegistro: '08:30' }, busy: false
+    visits: [
+      { lotCode: '0000017', visitNumber: 1, cycleDate: '2026-01-01', scheduledDate: '2026-03-01' },
+      { lotCode: '0000018', visitNumber: 2, cycleDate: '2026-01-01', scheduledDate: '2026-03-02' }
+    ],
+    recordIds: ['record-1', 'record-2'], draftId: 'draft', assignedDate: '2026-03-01',
+    farm: 'Finca A', time: { horaRegistro: '08:30' }, busy: false
   });
   return { ...context, controls, calls, form };
 }
 
-test('saves the chosen visit once and disables duplicate submission while awaiting the server', async () => {
+test('saves every visit in the group together and disables a duplicate submission', async () => {
   let resolve;
   const h = harness(() => new Promise(done => { resolve = done; }));
   const event = { preventDefault() {}, currentTarget: h.form };
   const first = h.saveWeeklyCapture(event);
-  await Promise.resolve();
+  await new Promise(done => setImmediate(done));
   await h.saveWeeklyCapture(event);
-  assert.equal(h.calls.length, 1);
-  assert.equal(h.controls['#weekly-capture-submit'].disabled, true);
-  const body = h.calls[0].options.body;
-  assert.equal(body.p_record_id, 'record-id');
-  assert.equal(body.p_lot_code, '0000017');
-  assert.equal(body.p_visit_number, 3);
-  assert.equal(body.p_cycle_date, '2026-01-01');
-  assert.equal(body.p_datos.FINCA, 'Finca A');
-  resolve();
-  await first;
+  try {
+    assert.equal(h.calls.length, 1);
+    assert.equal(h.controls['#weekly-capture-submit'].disabled, true);
+    assert.equal(h.calls[0].path, 'rpc/save_lot_visit_captures');
+    const body = h.calls[0].options.body;
+    assert.equal(body.p_captures.length, 2);
+    assert.equal(body.p_captures[0].record_id, 'record-1');
+    assert.equal(body.p_captures[0].lot_code, '0000017');
+    assert.equal(body.p_captures[0].visit_number, 1);
+    assert.equal(body.p_captures[0].cycle_date, '2026-01-01');
+    assert.equal(body.p_captures[1].record_id, 'record-2');
+    assert.equal(body.p_captures[1].lot_code, '0000018');
+    assert.equal(body.p_captures[1].visit_number, 2);
+    assert.equal(body.p_captures[1].datos.ID, 'record-2');
+  } finally {
+    resolve();
+    await first;
+  }
   assert.equal(h.controls['#weekly-capture-dialog'].closed, true);
 });
 
-test('keeps the form and the same record identity after a failed save', async () => {
+test('keeps the group form and record identities after a failed save', async () => {
   const h = harness(() => { throw new Error('Sin conexión'); });
   const event = { preventDefault() {}, currentTarget: h.form };
   await assert.rejects(h.saveWeeklyCapture(event), /Sin conexión/);
-  assert.equal(h.getCapture().recordId, 'record-id');
+  assert.deepEqual(Array.from(h.getCapture().recordIds), ['record-1', 'record-2']);
   assert.equal(h.controls['#weekly-capture-dialog'].closed, false);
   assert.equal(h.controls['#weekly-capture-submit'].disabled, false);
   await assert.rejects(h.saveWeeklyCapture(event), /Sin conexión/);
-  assert.equal(h.calls[1].options.body.p_record_id, 'record-id');
+  assert.deepEqual(Array.from(h.calls[1].options.body.p_captures.map(item => item.record_id)), ['record-1', 'record-2']);
 });
 
 test('loads visit numbers together with their records for the weekly schedule', async () => {
@@ -133,4 +157,78 @@ test('serializes the weekly Malezas form independently and retains detail identi
   assert.equal(detail['% COBERTURA'], '80');
   assert.equal(detail.IMAGEN[0].name, 'foto.png');
   assert.equal(ids, 1);
+});
+
+test('stores the combined form, image data, and every record identity in the local draft', async () => {
+  const start = source.indexOf('function persistWeeklyCaptureDraft() {');
+  const end = source.indexOf('\nasync function flushWeeklyCaptureDraft', start);
+  assert.ok(start >= 0 && end > start);
+  let savedDraft;
+  const capture = {
+    draftId: 'draft-id',
+    farm: 'Finca A',
+    assignedDate: '2026-03-01',
+    visits: [{ lotCode: '0000017', visitNumber: 1 }, { lotCode: '0000018', visitNumber: 2 }],
+    recordIds: ['record-1', 'record-2'],
+    data: {},
+    time: { horaRegistro: '08:30' },
+    persistPromise: Promise.resolve(),
+    busy: false
+  };
+  const status = { textContent: '' };
+  const { persistWeeklyCaptureDraft } = runInNewContext(source.slice(start, end) + '\n({ persistWeeklyCaptureDraft })', {
+    weeklyCapture: capture,
+    state: { user: { id: 'user-id' } },
+    $: selector => selector === '#weekly-capture-draft-status' ? status : {},
+    serializeForm: async () => ({
+      subregistros: { malezas_detalle: [{ IMAGEN: [{ name: 'lote1.png' }] }, { IMAGEN: [{ name: 'lote2.png' }] }] }
+    }),
+    putWeeklyVisitDraft: async draft => { savedDraft = draft; }
+  });
+  await persistWeeklyCaptureDraft();
+  assert.equal(savedDraft.id, 'draft-id');
+  assert.equal(savedDraft.userId, 'user-id');
+  assert.deepEqual(Array.from(savedDraft.visits, visit => visit.recordId), ['record-1', 'record-2']);
+  assert.equal(savedDraft.data.subregistros.malezas_detalle[1].IMAGEN[0].name, 'lote2.png');
+  assert.match(status.textContent, /Borrador guardado/);
+});
+
+test('renders a single group capture action and keeps each original visit in the group', () => {
+  const start = source.indexOf('function lotWeeklyVisitGroupCard(group) {');
+  const end = source.indexOf('\nfunction lotWeeklyProgramWindow', start);
+  assert.ok(start >= 0 && end > start);
+  const { lotWeeklyVisitGroupCard } = runInNewContext(source.slice(start, end) + '\n({ lotWeeklyVisitGroupCard })', {
+    esc: value => String(value).replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;'),
+    formatDate: value => value,
+    lotWeeklyProgramDayName: () => 'jueves'
+  });
+  const html = lotWeeklyVisitGroupCard({
+    farm: 'Finca A',
+    assignedDate: '2026-03-05',
+    visits: [
+      { lotCode: '0000017', visitNumber: 1, cycleDate: '2026-01-01', scheduledDate: '2026-03-01', responsible: 'Ana', status: 'Pendiente', statusKey: 'pending' },
+      { lotCode: '0000018', visitNumber: 2, cycleDate: '2026-01-02', scheduledDate: '2026-03-02', responsible: 'Ana', status: 'Vencida', statusKey: 'overdue' }
+    ]
+  });
+  assert.equal((html.match(/data-weekly-capture-group=/g) || []).length, 1);
+  assert.equal((html.match(/<tr>/g) || []).length, 3);
+  assert.match(html, /Capturar visitas del día \(2\)/);
+  assert.match(html, /2026-03-01/);
+  assert.match(html, /2026-03-02/);
+});
+
+test('isolates saved drafts for different filtered subsets of the same farm and day', () => {
+  const start = source.indexOf('function weeklyVisitIdentity(visit) {');
+  const end = source.indexOf('\nfunction queueWeeklyCaptureDraft', start);
+  assert.ok(start >= 0 && end > start);
+  const { weeklyVisitDraftId } = runInNewContext(source.slice(start, end) + '\n({ weeklyVisitDraftId })', {
+    state: { user: { id: 'user-id' } },
+    normalizeLotWeeklyFarm: value => String(value).trim().toLowerCase()
+  });
+  const first = { lotCode: '0000017', cycleDate: '2026-01-01', visitNumber: 1, scheduledDate: '2026-03-01' };
+  const second = { lotCode: '0000018', cycleDate: '2026-01-02', visitNumber: 2, scheduledDate: '2026-03-02' };
+  assert.equal(weeklyVisitDraftId('Finca A', '2026-03-05', [first, second]),
+    weeklyVisitDraftId('finca a', '2026-03-05', [second, first]));
+  assert.notEqual(weeklyVisitDraftId('Finca A', '2026-03-05', [first]),
+    weeklyVisitDraftId('Finca A', '2026-03-05', [second]));
 });

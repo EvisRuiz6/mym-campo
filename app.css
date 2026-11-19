@@ -202,6 +202,10 @@ input[type="file"].text-input { padding: 8px; }
 .lot-weekly-program-table { width: 100%; min-width: 660px; border-collapse: collapse; text-align: left; }
 .lot-weekly-program-table th, .lot-weekly-program-table td { padding: 9px 11px; border-bottom: 1px solid var(--line); vertical-align: top; font-size: 11px; }
 .lot-weekly-program-table th { background: #f5f8f5; color: #66766b; font-size: 10px; white-space: nowrap; }
+.lot-weekly-program-heading { align-items: center; }
+.lot-weekly-program-heading .primary-button { white-space: nowrap; }
+.weekly-visit-row-heading { display: flex; flex-direction: column; gap: 4px; padding: 11px 13px; border-radius: 8px; background: #f3f7f3; color: var(--forest); }
+.weekly-visit-row-heading span { color: var(--muted); font-size: 12px; }
 .lot-weekly-program-table tbody tr:last-child td { border-bottom: 0; }
 .lot-weekly-toolbar { align-items: end; flex-wrap: wrap; justify-content: flex-start; }
 .lot-weekly-toolbar .field { flex: 1 1 170px; margin: 0; }
@@ -319,7 +323,8 @@ dialog::backdrop { background: #17241c88; }
   .lot-weekly-candidate > :last-child { grid-column: 2; }
   .lot-weekly-toolbar .field { width: 100%; }
   .lot-weekly-toolbar .select-input { width: 100%; }
-  .lot-weekly-program-heading { flex-direction: column; }
+  .lot-weekly-program-heading { flex-direction: column; align-items: stretch; }
+  .lot-weekly-program-heading > .primary-button { width: 100%; }
   .lot-weekly-program-actions { width: 100%; }
   .lot-weekly-program-actions button { flex: 1 1 120px; }
   .lot-weekly-program-date-editor { align-items: stretch; flex-direction: column; }

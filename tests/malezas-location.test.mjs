@@ -10,7 +10,7 @@ assert.ok(functionStart >= 0 && functionEnd > functionStart, 'Malezas GPS captur
 const captureSource = appSource.slice(functionStart, functionEnd) + '\n({ captureWeedsLocation })';
 
 function createHarness(geolocation) {
-  const input = { value: '', dataset: {}, isConnected: true };
+  const input = { value: '', dataset: {}, isConnected: true, dispatchEvent() {} };
   const status = { textContent: '' };
   const button = { disabled: false };
   const root = { querySelector: () => null };
@@ -22,6 +22,7 @@ function createHarness(geolocation) {
   ]);
   const { captureWeedsLocation } = runInNewContext(captureSource, {
     navigator: { geolocation },
+    Event: class { constructor(type, options) { this.type = type; this.bubbles = options && options.bubbles; } },
     $: selector => elements.get(selector)
   });
   return { captureWeedsLocation, input, status, button };

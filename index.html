@@ -276,6 +276,21 @@
         </section>
       </main>
     </div>
+    <dialog id="weekly-capture-dialog" class="record-detail-dialog" aria-labelledby="weekly-capture-title">
+      <div class="record-detail-card">
+        <div class="record-detail-heading">
+          <div><p class="eyebrow">VISITAS SEMANALES · MALEZAS</p><h2 id="weekly-capture-title">Capturar visita</h2></div>
+          <button type="button" class="record-detail-close" id="weekly-capture-close" aria-label="Cerrar">×</button>
+        </div>
+        <p id="weekly-capture-summary" class="record-detail-summary"></p>
+        <p class="field-hint">Esta captura requiere conexión y se guarda directamente en el espacio compartido.</p>
+        <form id="weekly-capture-form" class="capture-form" novalidate>
+          <div id="weekly-capture-fields"></div>
+          <p id="weekly-capture-error" class="auth-error" role="alert" hidden></p>
+          <div class="form-actions"><button type="button" class="secondary-button" id="weekly-capture-cancel">Cancelar</button><button type="submit" class="primary-button" id="weekly-capture-submit">Guardar visita</button></div>
+        </form>
+      </div>
+    </dialog>
     <dialog id="record-detail-dialog" class="record-detail-dialog" aria-labelledby="record-detail-title">
       <div class="record-detail-card">
         <div class="record-detail-heading">
@@ -344,6 +359,6 @@
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </div>
   <script src="config.js"></script>
-  <script src="app.js?v=50"></script>
+  <script src="app.js?v=51"></script>
 </body>
 </html>

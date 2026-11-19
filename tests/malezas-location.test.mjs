@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
 
 const appSource = await readFile(new URL('../app.js', import.meta.url), 'utf8');
-const functionStart = appSource.indexOf('function captureWeedsLocation() {');
+const functionStart = appSource.indexOf('function captureWeedsLocation(root) {');
 const functionEnd = appSource.indexOf('\nfunction renderUsers', functionStart);
 assert.ok(functionStart >= 0 && functionEnd > functionStart, 'Malezas GPS capture must exist in app.js');
 const captureSource = appSource.slice(functionStart, functionEnd) + '\n({ captureWeedsLocation })';
@@ -13,10 +13,12 @@ function createHarness(geolocation) {
   const input = { value: '', dataset: {}, isConnected: true };
   const status = { textContent: '' };
   const button = { disabled: false };
+  const root = { querySelector: () => null };
   const elements = new Map([
-    ['#form-fields [name="UBICACIÓN"]', input],
-    ['#weeds-location-status', status],
-    ['#weeds-retry-location', button]
+    ['#form-fields', root],
+    ['[name="UBICACIÓN"]', input],
+    ['[data-weeds-location-status]', status],
+    ['[data-weeds-retry-location]', button]
   ]);
   const { captureWeedsLocation } = runInNewContext(captureSource, {
     navigator: { geolocation },

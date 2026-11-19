@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
 
 const appSource = await readFile(new URL('../app.js', import.meta.url), 'utf8');
-const functionStart = appSource.indexOf('async function serializeForm(form, recordId, previousData) {');
+const functionStart = appSource.indexOf('async function serializeForm(form, recordId, previousData, moduleKey) {');
 const functionEnd = appSource.indexOf('\nfunction setFormValue', functionStart);
 assert.ok(functionStart >= 0 && functionEnd > functionStart, 'Capture serialization must exist in app.js');
 const serializeFormSource = appSource.slice(functionStart, functionEnd) + '\n({ serializeForm })';

@@ -160,6 +160,37 @@ test('does not mark a plan with no scheduled visits as fulfilled', () => {
   assert.equal(result.statusKey, 'unscheduled');
 });
 
+test('reserves explicitly numbered visits before assigning historical captures', () => {
+  const plan = {
+    lot_code: '17',
+    cycle_date: '2026-01-01',
+    visit_dates: ['2026-01-10', '2026-02-10', '2026-03-10']
+  };
+  const result = helpers.evaluateLotFollowup(plan, [
+    { record_id: 'third', lot_code: '17', visit_date: '2026-01-05', visit_number: 3 },
+    { record_id: 'old', lot_code: '17', visit_date: '2026-01-06' },
+    { record_id: 'duplicate-third', lot_code: '17', visit_date: '2026-01-07', visit_number: 3 },
+    { record_id: 'previous-cycle', lot_code: '17', visit_date: '2025-12-31', visit_number: 2 }
+  ], '2026-01-08');
+  assert.deepEqual(Array.from(result.slots, slot => slot.visit_date), ['2026-01-06', null, '2026-01-05']);
+  assert.equal(result.pendingCount, 1);
+  assert.equal(result.fulfilled, false);
+  assert.deepEqual(Array.from(result.extraVisits, visit => visit.record_id), ['duplicate-third']);
+  const pending = helpers.buildLotWeeklyVisitItems([plan], [
+    { record_id: 'third', lot_code: '17', visit_date: '2026-01-05', visit_number: 3 }
+  ], {}, '2026-01-08');
+  assert.deepEqual(Array.from(pending, visit => visit.visitNumber), [1, 2]);
+});
+
+test('does not assign a capture linked to a different cycle to the current plan', () => {
+  const plan = { lot_code: '17', cycle_date: '2026-02-01', visit_dates: ['2026-03-01'] };
+  const result = helpers.evaluateLotFollowup(plan, [
+    { record_id: 'prior', lot_code: '17', visit_date: '2026-02-10', visit_number: 1, cycle_date: '2026-01-01' }
+  ], '2026-02-20');
+  assert.equal(result.pendingCount, 1);
+  assert.equal(result.actualCount, 0);
+});
+
 test('weekly visit candidates include the inclusive five-day window and stay within the farm', () => {
   const plans = [
     { lot_code: '1', cycle_date: '2026-03-01' },

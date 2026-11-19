@@ -1023,15 +1023,16 @@ function climateFields() {
     '</div></section><section class="form-section"><h2>Ubicación</h2><div class="field-grid"><div class="field full"><label class="field-label" for="f-location">Coordenadas GPS (automáticas)</label><input id="f-location" name="ubicacion" class="text-input" placeholder="Solicitando ubicación…" readonly><input id="f-location-lat" name="latitud" type="hidden"><input id="f-location-lon" name="longitud" type="hidden"><input id="f-location-accuracy" name="precision_gps_m" type="hidden"><div class="location-controls"><span id="location-status" class="field-hint" role="status">Solicitando ubicación del dispositivo…</span><button id="retry-location" class="add-row" type="button">Actualizar ubicación</button></div></div></div></section>' +
     '<section class="form-section"><h2>Lecturas de clima</h2><p class="field-hint">Añade una fila por medición. Unidades: °C, %, km/h y °C para Delta T.</p><div id="weather-rows"></div><div class="inline-actions"><button id="add-weather" class="add-row" type="button">＋ Agregar lectura</button></div></section>';
 }
-function weedsFields() {
+function weedsFields(prefix) {
+  prefix = prefix || '';
   const farmOptions = [...new Set(Object.values(state.lotLookup).map(location => location.finca).filter(Boolean))].sort();
   return '<section class="form-section"><h2>Visita de malezas</h2><p class="field-hint">Campos de la tabla Visita Malezas. El ID se genera al guardar la captura.</p><div class="field-grid">' +
-    fieldMarkup({ label: 'FECHA', name: 'FECHA', type: 'date', value: localDate(), required: true }, 'weeds-date', true) +
-    fieldMarkup({ label: 'UBICACIÓN', name: 'UBICACIÓN', placeholder: 'Latitud, longitud', hint: 'Se solicitará el GPS al abrir el formulario; puedes editar las coordenadas.' }, 'weeds-location', true) +
-    '<div class="field full"><div class="location-controls"><span id="weeds-location-status" class="field-hint" role="status">Esperando permiso de ubicación…</span><button id="weeds-retry-location" class="add-row" type="button">Actualizar ubicación</button></div></div>' +
-    fieldMarkup({ label: 'RESPONSABLE', name: 'RESPONSABLE', value: state.user.displayName }, 'weeds-owner', true) +
-    fieldMarkup({ label: 'ZONA', name: 'ZONA', placeholder: 'Se completa al seleccionar la finca', locationTarget: 'zona', farmZoneTarget: true }, 'weeds-zone', true) +
-    fieldMarkup({ label: 'FINCA', name: 'FINCA', type: 'select', locationTarget: 'finca', farmSelector: true, options: farmOptions }, 'weeds-farm', true) +
+    fieldMarkup({ label: 'FECHA', name: 'FECHA', type: 'date', value: localDate(), required: true }, prefix + 'weeds-date', true) +
+    fieldMarkup({ label: 'UBICACIÓN', name: 'UBICACIÓN', placeholder: 'Latitud, longitud', hint: 'Se solicitará el GPS al abrir el formulario; puedes editar las coordenadas.' }, prefix + 'weeds-location', true) +
+    '<div class="field full"><div class="location-controls"><span id="' + prefix + 'weeds-location-status" data-weeds-location-status class="field-hint" role="status">Esperando permiso de ubicación…</span><button id="' + prefix + 'weeds-retry-location" data-weeds-retry-location class="add-row" type="button">Actualizar ubicación</button></div></div>' +
+    fieldMarkup({ label: 'RESPONSABLE', name: 'RESPONSABLE', value: state.user.displayName }, prefix + 'weeds-owner', true) +
+    fieldMarkup({ label: 'ZONA', name: 'ZONA', placeholder: 'Se completa al seleccionar la finca', locationTarget: 'zona', farmZoneTarget: true }, prefix + 'weeds-zone', true) +
+    fieldMarkup({ label: 'FINCA', name: 'FINCA', type: 'select', locationTarget: 'finca', farmSelector: true, options: farmOptions }, prefix + 'weeds-farm', true) +
     '<div class="field full"><div class="field-hint" data-farm-zone-status role="status">Selecciona una finca para completar la zona.</div></div><div class="field full"><div class="field-hint" data-lot-location-status role="status">Ingresa un lote para completar finca y zona.</div></div></div></section><section class="form-section"><h2>Datos Malezas por lote</h2><p class="field-hint">Puedes agregar un detalle por cada lote visitado. Los registros quedan vinculados a esta visita en la captura local.</p>' +
     repeatSection('malezas_detalle', 'Detalle de malezas', 'Agregar lote', 'Incluye lote, labor (Plantilla o Soca), porcentajes de control y cobertura, imágenes, catorcena automática y observaciones.') + '</section>';
 }
@@ -1369,9 +1370,9 @@ function syncWeedsDetailDates(rows, dateValue) {
     updateWeedsCatorcena(row);
   }
 }
-function updateWeedsDatesForInput(input) {
+function updateWeedsDatesForInput(input, root) {
   if (input.matches('[name="FECHA"]')) {
-    const list = $('[data-repeat-list="malezas_detalle"]', $('#form-fields'));
+    const list = $('[data-repeat-list="malezas_detalle"]', root || $('#form-fields'));
     if (list) syncWeedsDetailDates($$('.child-row', list), input.value);
     return;
   }
@@ -1426,9 +1427,9 @@ const renderers = {
   clima: climateFields, malezas: weedsFields, epp: eppFields, vuelos: flightFields, calidad: qualityFields,
   variacion_aguilon: variacionAguilonFields, calibracion_aguilon: calibracionAguilonFields, calibraciones_pcpm: pcpmFields
 };
-function childRowMarkup(key, index) {
+function childRowMarkup(key, index, prefix) {
   const fields = childSchemas[key] || [];
-  const controls = fields.map(field => fieldMarkup(field, 'child-' + slug(key) + '-' + index, false)).join('');
+  const controls = fields.map(field => fieldMarkup(field, (prefix || '') + 'child-' + slug(key) + '-' + index, false)).join('');
   return '<div class="child-row"><div class="field-grid">' + controls + '</div><button type="button" class="remove-row" data-remove-child aria-label="Quitar detalle">Quitar detalle</button></div>';
 }
 function addChildRow(key) {
@@ -1625,7 +1626,8 @@ function chooseModule(key) {
   $$('.picker-groups [data-module]').forEach(button => button.classList.toggle('selected', button.dataset.module === key));
   $('#capture-form').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
-async function serializeForm(form, recordId, previousData) {
+async function serializeForm(form, recordId, previousData, moduleKey) {
+  moduleKey = moduleKey || state.currentModule;
   const attachment = file => new Promise((resolve, reject) => {
     if (!file || !file.name) { resolve(null); return; }
     const reader = new FileReader();
@@ -1647,12 +1649,12 @@ async function serializeForm(form, recordId, previousData) {
       data[key] = value;
     }
   }
-  if (state.currentModule === 'clima') {
+  if (moduleKey === 'clima') {
     data.lecturas = $$('.repeat-row', $('#weather-rows')).map(row =>
       Object.fromEntries($$('[name]', row).map(input => [input.name, input.value]))
     );
   }
-  if (state.currentModule === 'epp') {
+  if (moduleKey === 'epp') {
     const attendance = $$('.attendance-count', $('#form-fields'));
     data.asistencia_por_funcion = Object.fromEntries(attendance.map(input => [input.dataset.function, Number(input.value) || 0]));
     data.asistencia_general = Object.values(data.asistencia_por_funcion).reduce((sum, count) => sum + count, 0);
@@ -1662,7 +1664,7 @@ async function serializeForm(form, recordId, previousData) {
     data.cumplimiento_epp_por_funcion = Object.fromEntries(eppFunctions.map(role => [role.key, Object.fromEntries($$('.epp-item-count', $('#form-fields')).filter(input => input.dataset.function === role.key).map(input => [input.dataset.item, Number(input.value) || 0]))]));
     data.personas_llegaron = Number(data.personas_llegaron) || 0;
   }
-  if (state.currentModule === 'vuelos') {
+  if (moduleKey === 'vuelos') {
     const metrics = calculateFlightMetrics(data.labor, data.litros, data.area_ha);
     data.litros_por_hectarea_objetivo = metrics.applicationVolumeLitersPerHa;
     data.litros_por_hectarea = metrics.appliedLitersPerHa;
@@ -1673,7 +1675,7 @@ async function serializeForm(form, recordId, previousData) {
     ? previousData.subregistros
     : {};
   const subregistros = { ...oldSubrecords };
-  for (const list of $$('[data-repeat-list]', $('#form-fields'))) {
+  for (const list of $$('[data-repeat-list]', form)) {
     const key = list.dataset.repeatList;
     if (key === 'malezas_detalle') $$('.child-row', list).forEach(updateWeedsCatorcena);
     const oldRows = Array.isArray(oldSubrecords[key]) ? oldSubrecords[key] : [];
@@ -1691,7 +1693,7 @@ async function serializeForm(form, recordId, previousData) {
         ];
       })));
       if (key === 'malezas_detalle') {
-        serialized.ID = oldRow && oldRow.ID || crypto.randomUUID();
+        serialized.ID = oldRow && oldRow.ID || row.dataset.generatedId || (row.dataset.generatedId = crypto.randomUUID());
         serialized.ID_NEW = recordId;
         const coverage = malezasCoveragePercent(serialized['% CONTROL']);
         serialized['% COBERTURA'] = coverage == null ? '' : String(coverage);
@@ -1699,10 +1701,10 @@ async function serializeForm(form, recordId, previousData) {
       return serialized;
     }));
   }
-  if (state.currentModule === 'malezas') {
+  if (moduleKey === 'malezas') {
     data.ID = recordId;
   }
-  if (state.currentModule === 'calidad') data.ID = recordId;
+  if (moduleKey === 'calidad') data.ID = recordId;
   if (Object.keys(subregistros).length) data.subregistros = subregistros;
   return data;
 }
@@ -2735,14 +2737,36 @@ function evaluateLotFollowup(plan, visits, today) {
     if (normalizeVisitMapLotCode(visit && visit.lot_code) !== lotCode) return;
     const date = String(visit && visit.visit_date || '').slice(0, 10);
     if (excelDateToIso(date) !== date || (cycleDate && date < cycleDate)) return;
+    if (visit && visit.visit_number != null && visit.cycle_date && visit.cycle_date !== cycleDate) return;
     const recordId = String(visit && (visit.record_id || visit.id) || '');
     const key = recordId || lotCode + ':' + date + ':' + index;
-    if (!uniqueVisits.has(key)) uniqueVisits.set(key, { record_id: recordId, visit_date: date });
+    if (!uniqueVisits.has(key)) uniqueVisits.set(key, {
+      record_id: recordId,
+      visit_date: date,
+      visit_number: visit && visit.visit_number
+    });
   });
   const actualVisits = [...uniqueVisits.values()].sort((a, b) => a.visit_date.localeCompare(b.visit_date));
   const requiredCount = scheduledDates.length;
+  const assignedVisits = Array(requiredCount).fill(null);
+  const historicalVisits = [];
+  for (const visit of actualVisits) {
+    if (visit.visit_number == null) {
+      historicalVisits.push(visit);
+      continue;
+    }
+    const number = Number(visit.visit_number);
+    if (Number.isInteger(number) && number >= 1 && number <= requiredCount && !assignedVisits[number - 1]) {
+      assignedVisits[number - 1] = visit;
+    }
+  }
+  for (const visit of historicalVisits) {
+    const index = assignedVisits.indexOf(null);
+    if (index < 0) break;
+    assignedVisits[index] = visit;
+  }
   const slots = scheduledDates.map((dueDate, index) => {
-    const actual = actualVisits[index] || null;
+    const actual = assignedVisits[index];
     return {
       number: index + 1,
       due_date: dueDate,
@@ -2750,9 +2774,9 @@ function evaluateLotFollowup(plan, visits, today) {
       status: actual ? (actual.visit_date > dueDate ? 'Realizada tarde' : 'Realizada') : (dueDate < today ? 'Atrasada' : 'Pendiente')
     };
   });
-  const pendingCount = Math.max(0, requiredCount - actualVisits.length);
+  const pendingCount = slots.filter(slot => !slot.visit_date).length;
   const overdueCount = slots.filter(slot => slot.status === 'Atrasada').length;
-  const fulfilled = requiredCount > 0 && actualVisits.length >= requiredCount;
+  const fulfilled = requiredCount > 0 && pendingCount === 0;
   const statusKey = !requiredCount ? 'unscheduled' : fulfilled ? 'complete' : overdueCount ? 'overdue' : 'pending';
   return {
     actualCount: actualVisits.length,
@@ -2765,6 +2789,7 @@ function evaluateLotFollowup(plan, visits, today) {
     nextDueDate: slots.find(slot => !slot.visit_date)?.due_date || '',
     lastVisitDate: actualVisits.length ? actualVisits[actualVisits.length - 1].visit_date : '',
     actualVisits,
+    extraVisits: actualVisits.filter(visit => !assignedVisits.includes(visit)),
     slots
   };
 }
@@ -2842,6 +2867,7 @@ function buildLotWeeklyVisitItems(plans, visits, lotLookup, today) {
         responsible: String(plan.responsible || '').trim(),
         lotCode,
         visitNumber: slot.number,
+        cycleDate: String(plan.cycle_date || '').slice(0, 10),
         scheduledDate: slot.due_date,
         day: lotWeeklyProgramDay(slot.due_date),
         status: slot.due_date < today ? 'Vencida' : 'Pendiente',
@@ -2929,7 +2955,10 @@ function lotWeeklyVisitGroupCard(group) {
       '<td>' + esc(formatDate(visit.scheduledDate)) + '</td>' +
       '<td>' + esc(visit.responsible || '—') + '</td>' +
       '<td>' + esc(formatDate(group.assignedDate)) + '</td>' +
-      '<td><span class="lot-followup-status-pill is-' + visit.statusKey + '">' + visit.status + '</span></td></tr>'
+      '<td><span class="lot-followup-status-pill is-' + visit.statusKey + '">' + visit.status + '</span></td>' +
+      '<td><button type="button" class="record-view-button" data-weekly-capture-lot="' + esc(visit.lotCode) +
+      '" data-weekly-capture-number="' + visit.visitNumber + '" data-weekly-capture-cycle="' + esc(visit.cycleDate) +
+      '" data-weekly-capture-date="' + esc(visit.scheduledDate) + '">Capturar visita</button></td></tr>'
   ).join('');
   const dayName = lotWeeklyProgramDayName(group.assignedDate);
   return '<article class="lot-weekly-program-card">' +
@@ -2938,7 +2967,7 @@ function lotWeeklyVisitGroupCard(group) {
         '</strong> · Fecha asignada: ' + esc(formatDate(group.assignedDate)) +
         ' · Visitas agrupadas: ' + group.visits.length + '</p></div></div>' +
     '<div class="lot-weekly-program-table-wrap"><table class="lot-weekly-program-table">' +
-      '<thead><tr><th>Lote</th><th>Visita</th><th>Fecha programada original</th><th>Responsable</th><th>Fecha asignada</th><th>Estado</th></tr></thead>' +
+      '<thead><tr><th>Lote</th><th>Visita</th><th>Fecha programada original</th><th>Responsable</th><th>Fecha asignada</th><th>Estado</th><th>Acción</th></tr></thead>' +
       '<tbody>' + rows + '</tbody></table></div></article>';
 }
 function lotWeeklyProgramWindow(referenceDate) {
@@ -3482,10 +3511,11 @@ function captureLocation() {
     button.disabled = false;
   }, { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
 }
-function captureWeedsLocation() {
-  const input = $('#form-fields [name="UBICACIÓN"]');
-  const status = $('#weeds-location-status');
-  const button = $('#weeds-retry-location');
+function captureWeedsLocation(root) {
+  root = root && root.querySelector ? root : $('#form-fields');
+  const input = $('[name="UBICACIÓN"]', root);
+  const status = $('[data-weeds-location-status]', root);
+  const button = $('[data-weeds-retry-location]', root);
   if (!input || !status || !button) return;
   if (!navigator.geolocation) {
     status.textContent = 'Este navegador no permite obtener la ubicación automática; ingresa las coordenadas manualmente.';
@@ -3870,7 +3900,7 @@ function renderLotFollowup() {
       '<li><strong>Visita ' + slot.number + '</strong>: programada ' + esc(formatDate(slot.due_date)) + ' · ' + esc(slot.status) +
       (slot.visit_date ? ' (' + esc(formatDate(slot.visit_date)) + ')' : '') + '</li>'
     );
-    summary.actualVisits.slice(summary.requiredCount).forEach((visit, index) => {
+    summary.extraVisits.forEach((visit, index) => {
       details.push('<li><strong>Visita adicional ' + (index + 1) + '</strong>: ' + esc(formatDate(visit.visit_date)) + '</li>');
     });
     if (!details.length) details.push('<li>No hay visitas programadas para este lote.</li>');
@@ -3967,7 +3997,7 @@ async function fetchAllLotWeeklyPrograms() {
 async function fetchAllLotFollowupVisits() {
   const visits = [];
   for (let offset = 0, page; ; offset += 1000) {
-    page = await cloudRequest('rpc/get_lot_followup_visits?select=record_id,lot_code,visit_date&order=record_id.asc,lot_code.asc&limit=1000&offset=' + offset, {
+    page = await cloudRequest('rpc/get_lot_followup_visits_with_links?select=record_id,lot_code,visit_date,cycle_date,visit_number&order=record_id.asc,lot_code.asc&limit=1000&offset=' + offset, {
       method: 'POST',
       body: {}
     });
@@ -4010,6 +4040,105 @@ async function loadLotFollowup() {
   } finally {
     if (state.lotFollowupLoadPromise === request) state.lotFollowupLoadPromise = null;
   }
+}
+let weeklyCapture = null;
+async function openWeeklyCapture(button) {
+  if (!canAccessLotFollowup() || !userCanOpenModule('malezas')) throw new Error('No tienes permiso para capturar esta visita.');
+  if (!navigator.onLine || !state.configured) throw new Error('Conéctate a internet para capturar una visita semanal.');
+  const selection = {
+    lotCode: button.dataset.weeklyCaptureLot,
+    number: Number(button.dataset.weeklyCaptureNumber),
+    cycleDate: button.dataset.weeklyCaptureCycle,
+    scheduledDate: button.dataset.weeklyCaptureDate
+  };
+  await loadLotFollowup();
+  const visit = buildLotWeeklyVisitItems(state.lotFollowupPlans, state.lotFollowupVisits, state.lotLookup, localDate())
+    .find(item => item.lotCode === selection.lotCode && item.visitNumber === selection.number &&
+      item.cycleDate === selection.cycleDate && item.scheduledDate === selection.scheduledDate);
+  if (!visit) throw new Error('La visita ya no está pendiente o el plan cambió. Revisa la agenda actualizada.');
+  const location = state.lotLookup[visit.lotCode];
+  if (!location) throw new Error('El lote ya no está disponible para esta cuenta.');
+  const form = $('#weekly-capture-form');
+  const fields = $('#weekly-capture-fields');
+  form.reset();
+  fields.innerHTML = weedsFields('weekly-');
+  const list = $('[data-repeat-list="malezas_detalle"]', fields);
+  list.innerHTML = childRowMarkup('malezas_detalle', 0, 'weekly-');
+  $('[data-add-child]', fields).hidden = true;
+  $('[data-remove-child]', list).hidden = true;
+  const row = $('.child-row', list);
+  const lot = $('[data-child-field="LOTE"]', row);
+  lot.value = visit.lotCode;
+  lot.readOnly = true;
+  const detailDate = $('[data-child-field="FECHA"]', row);
+  const mainDate = $('[name="FECHA"]', fields);
+  mainDate.min = visit.cycleDate;
+  detailDate.min = visit.cycleDate;
+  detailDate.required = true;
+  detailDate.value = mainDate.value;
+  detailDate.dataset.visitDateValue = mainDate.value;
+  $('[name="FINCA"]', fields).value = location.finca;
+  $('[name="FINCA"]', fields).disabled = true;
+  $('[name="ZONA"]', fields).value = location.zona;
+  $('[name="ZONA"]', fields).readOnly = true;
+  $('[name="RESPONSABLE"]', fields).value = visit.responsible || state.user.displayName;
+  $('[data-child-field="% CONTROL"]', row).addEventListener('input', () => updateWeedsCoverage(row));
+  updateWeedsCatorcena(row);
+  updateWeedsCoverage(row);
+  $('[data-weeds-retry-location]', fields).addEventListener('click', () => captureWeedsLocation(fields));
+  $('#weekly-capture-title').textContent = 'Lote ' + visit.lotCode + ' · Visita ' + visit.visitNumber;
+  $('#weekly-capture-summary').textContent = visit.farm + ' · Fecha original: ' + formatDate(visit.scheduledDate) +
+    ' · Ciclo: ' + formatDate(visit.cycleDate);
+  $('#weekly-capture-error').hidden = true;
+  weeklyCapture = { ...selection, recordId: crypto.randomUUID(), time: captureTimestamp(), finca: location.finca, busy: false };
+  $('#weekly-capture-dialog').showModal();
+  captureWeedsLocation(fields);
+}
+async function saveWeeklyCapture(event) {
+  event.preventDefault();
+  const capture = weeklyCapture;
+  const form = event.currentTarget;
+  if (!capture || capture.busy || !form.reportValidity()) return;
+  if (!navigator.onLine || !state.configured) throw new Error('Conéctate a internet para guardar la visita.');
+  capture.busy = true;
+  const submit = $('#weekly-capture-submit');
+  submit.disabled = true;
+  $('#weekly-capture-close').disabled = true;
+  $('#weekly-capture-cancel').disabled = true;
+  try {
+    const data = await serializeForm(form, capture.recordId, null, 'malezas');
+    data.FINCA = capture.finca;
+    data.hora_registro = capture.time.horaRegistro;
+    await cloudRequest('rpc/save_lot_visit_capture', {
+      method: 'POST',
+      body: {
+        p_record_id: capture.recordId, p_lot_code: capture.lotCode,
+        p_cycle_date: capture.cycleDate, p_visit_number: capture.number,
+        p_scheduled_date: capture.scheduledDate, p_datos: data
+      }
+    });
+    $('#weekly-capture-dialog').close();
+    weeklyCapture = null;
+    toast('Visita guardada en el espacio compartido.');
+    try {
+      await loadLotFollowup();
+      await syncCloudRecords(false);
+    } catch (error) {
+      handleLotFollowupError(error);
+      setLotFollowupStatus('La visita se guardó, pero no se pudo actualizar la agenda. Usa Actualizar.', 'warning');
+    }
+  } finally {
+    capture.busy = false;
+    submit.disabled = false;
+    $('#weekly-capture-close').disabled = false;
+    $('#weekly-capture-cancel').disabled = false;
+  }
+}
+function showWeeklyCaptureError(error) {
+  console.error('No se pudo guardar la visita semanal.', error);
+  const node = $('#weekly-capture-error');
+  node.textContent = error.message || 'No se pudo guardar la visita.';
+  node.hidden = false;
 }
 function editLotWeeklyProgram(programId) {
   if (!canAccessLotFollowup()) return;
@@ -4984,6 +5113,25 @@ $('#lot-weekly-schedule-filter-week').addEventListener('change', renderLotWeekly
 $('#lot-weekly-schedule-filter-day').addEventListener('change', renderLotWeeklySchedule);
 $('#lot-weekly-schedule-filter-responsible').addEventListener('change', renderLotWeeklySchedule);
 $('#lot-weekly-schedule-refresh').addEventListener('click', () => loadLotFollowup().catch(handleLotFollowupError));
+$('#lot-weekly-program-list').addEventListener('click', event => {
+  const button = event.target.closest('[data-weekly-capture-lot]');
+  if (button) openWeeklyCapture(button).catch(handleLotFollowupError);
+});
+$('#weekly-capture-form').addEventListener('input', event => {
+  updateWeedsDatesForInput(event.target, $('#weekly-capture-fields'));
+});
+$('#weekly-capture-form').addEventListener('change', event => {
+  updateWeedsDatesForInput(event.target, $('#weekly-capture-fields'));
+});
+$('#weekly-capture-form').addEventListener('submit', event => {
+  saveWeeklyCapture(event).catch(showWeeklyCaptureError);
+});
+$('#weekly-capture-close').addEventListener('click', () => $('#weekly-capture-dialog').close());
+$('#weekly-capture-cancel').addEventListener('click', () => $('#weekly-capture-dialog').close());
+$('#weekly-capture-dialog').addEventListener('cancel', event => {
+  if (weeklyCapture && weeklyCapture.busy) event.preventDefault();
+});
+$('#weekly-capture-dialog').addEventListener('close', () => { weeklyCapture = null; });
 $('#lot-followup-import').addEventListener('change', async event => {
   const input = event.currentTarget;
   const file = input.files && input.files[0];

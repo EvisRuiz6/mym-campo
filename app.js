@@ -2818,6 +2818,45 @@ function filterLotWeeklyPrograms(programs, farmFilter, weekFilter, dayFilter) {
       String(a.farm || '').localeCompare(String(b.farm || ''), 'es')
     );
 }
+function buildLotWeeklyVisitItems(plans, visits, lotLookup, today) {
+  const items = [];
+  const seen = new Set();
+  for (const plan of Array.isArray(plans) ? plans : []) {
+    const lotCode = normalizeVisitMapLotCode(plan && plan.lot_code);
+    if (!lotCode) continue;
+    const summary = evaluateLotFollowup(plan, visits, today);
+    const lot = lotLookup && lotLookup[lotCode] || {};
+    for (const slot of summary.slots.slice(0, 3)) {
+      if (slot.visit_date) continue;
+      const key = lotCode + ':' + slot.number + ':' + slot.due_date;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      items.push({
+        farm: lot.finca || plan.finca || 'Sin finca',
+        lotCode,
+        visitNumber: slot.number,
+        scheduledDate: slot.due_date,
+        day: lotWeeklyProgramDay(slot.due_date),
+        status: slot.due_date < today ? 'Vencida' : 'Pendiente',
+        statusKey: slot.due_date < today ? 'overdue' : 'pending'
+      });
+    }
+  }
+  return items.sort((a, b) =>
+    a.farm.localeCompare(b.farm, 'es') ||
+    a.scheduledDate.localeCompare(b.scheduledDate) ||
+    a.lotCode.localeCompare(b.lotCode) ||
+    a.visitNumber - b.visitNumber
+  );
+}
+function filterLotWeeklyVisits(visits, farmFilter, dayFilter) {
+  const farmKey = normalizeLotWeeklyFarm(farmFilter);
+  const day = String(dayFilter || '');
+  return (Array.isArray(visits) ? visits : []).filter(visit =>
+    (!farmKey || normalizeLotWeeklyFarm(visit.farm) === farmKey) &&
+    (!day || String(visit.day) === day)
+  );
+}
 function lotWeeklyProgramWindow(referenceDate) {
   const date = lotWeeklyProgramDate(referenceDate);
   if (!date) return null;
@@ -3518,18 +3557,11 @@ function clearLotFollowupData() {
   state.lotWeeklyPrograms = [];
   state.lotFollowupLoadPromise = null;
   state.editingLotFollowup = null;
-  state.editingLotWeeklyProgramId = null;
-  state.lotWeeklyProgramDraftKey = '';
-  state.lotWeeklyProgramDraftLotCodes = [];
   $('#lot-followup-summary').innerHTML = '';
   $('#lot-followup-rows').innerHTML = '<tr><td colspan="8" class="lot-followup-empty">Carga los planes para consultar el seguimiento.</td></tr>';
   $('#lot-followup-lot-options').innerHTML = '';
-  $('#lot-weekly-program-farm').innerHTML = '<option value="">Selecciona una finca</option>';
   $('#lot-weekly-filter-farm').innerHTML = '<option value="">Todas las fincas</option>';
-  $('#lot-weekly-program-list').innerHTML = '<p class="lot-followup-empty">Carga los programas semanales para consultarlos.</p>';
-  $('#lot-weekly-program-candidates').innerHTML = '<p class="lot-followup-empty">Selecciona una finca y fecha para consultar los lotes elegibles.</p>';
-  $('#lot-weekly-program-date-summary').textContent = 'Elige una finca y una fecha para ver la semana y el día programados.';
-  $('#lot-weekly-filter-week').value = '';
+  $('#lot-weekly-program-list').innerHTML = '<p class="lot-followup-empty">Carga los planes y las visitas para consultar los pendientes.</p>';
   $('#lot-weekly-filter-day').value = '';
   setLotFollowupStatus('', '');
 }
@@ -3576,15 +3608,10 @@ function renderLotWeeklyFarmOptions() {
     if (key && !farms.has(key)) farms.set(key, farm);
   });
   const options = [...farms.values()].sort((a, b) => a.localeCompare(b, 'es'));
-  const farmSelect = $('#lot-weekly-program-farm');
   const filterSelect = $('#lot-weekly-filter-farm');
-  const currentFarm = farmSelect.value;
   const currentFilter = filterSelect.value;
-  farmSelect.innerHTML = '<option value="">Selecciona una finca</option>' +
-    options.map(farm => '<option value="' + esc(farm) + '">' + esc(farm) + '</option>').join('');
   filterSelect.innerHTML = '<option value="">Todas las fincas</option>' +
     options.map(farm => '<option value="' + esc(farm) + '">' + esc(farm) + '</option>').join('');
-  if (options.includes(currentFarm)) farmSelect.value = currentFarm;
   if (options.includes(currentFilter)) filterSelect.value = currentFilter;
 }
 function lotWeeklyProgramMemberCodes(program) {
@@ -3780,70 +3807,37 @@ function renderLotFollowup() {
   renderLotWeeklyPrograms();
 }
 function renderLotWeeklyPrograms() {
-  const programs = filterLotWeeklyPrograms(
-    state.lotWeeklyPrograms,
+  const visits = filterLotWeeklyVisits(
+    buildLotWeeklyVisitItems(state.lotFollowupPlans, state.lotFollowupVisits, state.lotLookup, localDate()),
     $('#lot-weekly-filter-farm').value,
-    $('#lot-weekly-filter-week').value,
     $('#lot-weekly-filter-day').value
   );
-  const cards = programs.map(program => {
-    const weekStart = lotWeeklyProgramDate(program.week_start);
-    const weekEnd = lotWeeklyProgramShiftDate(weekStart, 6);
-    const scheduledDate = lotWeeklyProgramDate(program.scheduled_date);
-    const dayName = lotWeeklyProgramDayName(scheduledDate);
-    const bounds = lotWeeklyProgramDateBounds(program);
-    const canChangeDate = program.can_update_date !== false;
-    const members = (Array.isArray(program.members) ? program.members : [])
-      .slice()
-      .sort((a, b) => String(a.lot_code || '').localeCompare(String(b.lot_code || '')));
-    const memberRows = members.map(member => {
-      const referenceDate = lotWeeklyProgramDate(member.reference_date);
-      const window = lotWeeklyProgramWindow(referenceDate);
-      return '<tr>' +
-        '<td><strong>Lote ' + esc(member.lot_code || '') + '</strong></td>' +
-        '<td>' + esc(referenceDate ? formatDate(referenceDate) : 'Sin fecha') + '</td>' +
-        '<td>' + (window
-          ? esc(formatDate(window.start) + ' a ' + formatDate(window.end))
-          : 'Sin rango disponible') + '</td>' +
-        '<td>' + esc(dayName.charAt(0).toLocaleUpperCase('es-GT') + dayName.slice(1) + ' · ' + formatDate(scheduledDate)) + '</td>' +
-      '</tr>';
-    });
-    const dateEditor = bounds && bounds.valid
-      ? '<div class="lot-weekly-program-date-editor">' +
-          '<label class="field"><span class="field-label">Ajustar fecha programada</span>' +
-            '<input class="text-input" type="date" data-lot-weekly-date="' + esc(program.id) + '" value="' +
-              esc(scheduledDate) + '" min="' + esc(bounds.start) + '" max="' + esc(bounds.end) + '"' +
-              (canChangeDate ? '' : ' disabled') + ' required></label>' +
-          '<button class="secondary-button" type="button" data-lot-weekly-date-save="' + esc(program.id) + '"' +
-            (canChangeDate ? '' : ' disabled') + '>Guardar fecha</button>' +
-        '</div>'
-      : '<p class="field-hint">No existe una fecha común válida para todos los lotes de este programa.</p>';
-    const hiddenMemberNote = program.can_delete === false
-      ? '<p class="field-hint">El programa incluye lotes de zonas no asignadas. Sus datos no se muestran; no puedes cambiar su fecha ni eliminarlo.</p>'
-      : '';
+  const groups = new Map();
+  visits.forEach(visit => {
+    const key = normalizeLotWeeklyFarm(visit.farm) + '|' + visit.scheduledDate;
+    if (!groups.has(key)) groups.set(key, { farm: visit.farm, scheduledDate: visit.scheduledDate, visits: [] });
+    groups.get(key).visits.push(visit);
+  });
+  const cards = [...groups.values()].map(group => {
+    const dayName = lotWeeklyProgramDayName(group.scheduledDate);
+    const rows = group.visits.map(visit =>
+      '<tr><td><strong>Lote ' + esc(visit.lotCode) + '</strong></td>' +
+        '<td>Visita ' + visit.visitNumber + '</td>' +
+        '<td>' + esc(formatDate(visit.scheduledDate)) + '</td>' +
+        '<td><span class="lot-followup-status-pill is-' + visit.statusKey + '">' + visit.status + '</span></td></tr>'
+    ).join('');
     return '<article class="lot-weekly-program-card">' +
-      '<div class="lot-weekly-program-heading"><div><h3>' + esc(program.farm || 'Sin finca') + '</h3>' +
-        '<p>Semana: ' + esc(formatDate(weekStart)) + ' a ' + esc(formatDate(weekEnd)) +
-          ' · Día común: <strong>' + esc(dayName.charAt(0).toLocaleUpperCase('es-GT') + dayName.slice(1)) +
-          '</strong> · Fecha: ' + esc(formatDate(scheduledDate)) + ' · Lotes en tus zonas: ' + members.length + '</p></div>' +
-        '<div class="lot-weekly-program-actions">' +
-          '<button class="record-view-button" type="button" data-lot-weekly-edit="' + esc(program.id) + '">Editar lotes</button>' +
-          '<button class="record-view-button" type="button" data-lot-weekly-delete="' + esc(program.id) + '"' +
-            (program.can_delete === false ? ' disabled title="Incluye lotes fuera de tus zonas asignadas"' : '') +
-            '>Eliminar programa</button>' +
-        '</div></div>' +
-      hiddenMemberNote +
-      dateEditor +
+      '<div class="lot-weekly-program-heading"><div><h3>' + esc(group.farm) + '</h3>' +
+        '<p><strong>' + esc(dayName.charAt(0).toLocaleUpperCase('es-GT') + dayName.slice(1)) +
+          '</strong> · Fecha programada: ' + esc(formatDate(group.scheduledDate)) +
+          ' · Visitas pendientes: ' + group.visits.length + '</p></div></div>' +
       '<div class="lot-weekly-program-table-wrap"><table class="lot-weekly-program-table">' +
-        '<thead><tr><th>Lote</th><th>Fecha de referencia</th><th>Rango permitido ±5 días</th><th>Día y fecha programados</th></tr></thead>' +
-        '<tbody>' + memberRows.join('') + '</tbody></table></div>' +
-    '</article>';
+        '<thead><tr><th>Lote</th><th>Visita</th><th>Fecha programada original</th><th>Estado</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody></table></div></article>';
   });
   $('#lot-weekly-program-list').innerHTML = cards.length
     ? cards.join('')
-    : '<p class="lot-followup-empty">' + (state.lotWeeklyPrograms.length
-      ? 'No hay programas que coincidan con los filtros.'
-      : 'Todavía no hay programas semanales cargados.') + '</p>';
+    : '<p class="lot-followup-empty">No hay visitas pendientes ni vencidas para los filtros seleccionados.</p>';
 }
 async function fetchAllLotFollowupPlans() {
   const plans = [];
@@ -3885,23 +3879,21 @@ async function loadLotFollowup() {
     return;
   }
   if (!navigator.onLine) {
-    setLotFollowupStatus('Conéctate a internet para consultar los planes, las visitas y los programas semanales compartidos.', 'warning');
+    setLotFollowupStatus('Conéctate a internet para consultar los planes y las visitas compartidas.', 'warning');
     return;
   }
   if (state.lotFollowupLoadPromise) return state.lotFollowupLoadPromise;
   const userId = state.user.id;
   const request = (async () => {
-    setLotFollowupStatus('Consultando planes, visitas y programas semanales…', 'info');
+    setLotFollowupStatus('Consultando planes y visitas…', 'info');
     await loadLotLookup();
-    const [plans, visits, programs] = await Promise.all([
+    const [plans, visits] = await Promise.all([
       fetchAllLotFollowupPlans(),
-      fetchAllLotFollowupVisits(),
-      fetchAllLotWeeklyPrograms()
+      fetchAllLotFollowupVisits()
     ]);
     if (!state.user || state.user.id !== userId) return;
     state.lotFollowupPlans = plans;
     state.lotFollowupVisits = visits;
-    state.lotWeeklyPrograms = programs;
     renderLotFollowupLotOptions();
     renderLotFollowup();
   })();
@@ -4170,7 +4162,6 @@ function renderHome() {
   renderLotWeeklyFarmOptions();
   resetLotWeeklyProgramForm();
   $('#lot-weekly-filter-farm').value = '';
-  $('#lot-weekly-filter-week').value = '';
   $('#lot-weekly-filter-day').value = '';
   populateInviteRoles();
   populateCreateUserRoles();
@@ -4881,36 +4872,9 @@ $('#lot-followup-cancel-edit').addEventListener('click', () => {
 $('#lot-followup-refresh').addEventListener('click', () => loadLotFollowup().catch(handleLotFollowupError));
 $('#lot-followup-search').addEventListener('input', renderLotFollowup);
 $('#lot-followup-filter').addEventListener('change', renderLotFollowup);
-$('#lot-weekly-program-form').addEventListener('submit', event => {
-  saveLotWeeklyProgram(event).catch(handleLotFollowupError);
-});
-$('#lot-weekly-program-farm').addEventListener('change', renderLotWeeklyProgramCandidates);
-$('#lot-weekly-program-date').addEventListener('change', renderLotWeeklyProgramCandidates);
-$('#lot-weekly-program-candidates').addEventListener('change', () => {
-  state.lotWeeklyProgramDraftLotCodes = $$('[data-lot-weekly-lot]:checked', $('#lot-weekly-program-candidates'))
-    .map(input => normalizeVisitMapLotCode(input.value));
-  renderLotWeeklyProgramCandidates();
-});
-$('#lot-weekly-program-cancel').addEventListener('click', () => {
-  resetLotWeeklyProgramForm();
-  setLotFollowupStatus('', '');
-});
 $('#lot-weekly-filter-farm').addEventListener('change', renderLotWeeklyPrograms);
-$('#lot-weekly-filter-week').addEventListener('change', renderLotWeeklyPrograms);
 $('#lot-weekly-filter-day').addEventListener('change', renderLotWeeklyPrograms);
 $('#lot-weekly-program-refresh').addEventListener('click', () => loadLotFollowup().catch(handleLotFollowupError));
-$('#lot-weekly-program-list').addEventListener('click', event => {
-  const editButton = event.target.closest('[data-lot-weekly-edit]');
-  const dateButton = event.target.closest('[data-lot-weekly-date-save]');
-  const deleteButton = event.target.closest('[data-lot-weekly-delete]');
-  if (editButton) {
-    editLotWeeklyProgram(editButton.dataset.lotWeeklyEdit);
-  } else if (dateButton) {
-    saveLotWeeklyProgramDate(dateButton.dataset.lotWeeklyDateSave).catch(handleLotFollowupError);
-  } else if (deleteButton) {
-    deleteLotWeeklyProgram(deleteButton.dataset.lotWeeklyDelete).catch(handleLotFollowupError);
-  }
-});
 $('#lot-followup-import').addEventListener('change', async event => {
   const input = event.currentTarget;
   const file = input.files && input.files[0];

@@ -2803,6 +2803,12 @@ function lotWeeklyProgramDayName(value) {
     ? new Date(dateValue + 'T12:00:00Z').toLocaleDateString('es-GT', { weekday: 'long' })
     : '';
 }
+function lotWeeklyVisitAssignedDate(originalDate) {
+  const date = lotWeeklyProgramDate(originalDate);
+  return date && lotWeeklyProgramDay(date) === 0
+    ? lotWeeklyProgramShiftDate(date, 1)
+    : date;
+}
 function filterLotWeeklyPrograms(programs, farmFilter, weekFilter, dayFilter) {
   const farmKey = normalizeLotWeeklyFarm(farmFilter);
   const weekStart = lotWeeklyProgramWeekStart(weekFilter);
@@ -2876,11 +2882,12 @@ function groupLotWeeklyVisits(visits) {
     );
     let group = null;
     for (const visit of farmVisits) {
-      if (!group || visit.scheduledDate > lotWeeklyProgramShiftDate(group.assignedDate, 5)) {
+      if (!group || visit.scheduledDate > lotWeeklyProgramShiftDate(group.anchorDate, 5)) {
         group = {
           farm: visit.farm,
-          assignedDate: visit.scheduledDate,
-          weekStart: lotWeeklyProgramWeekStart(visit.scheduledDate),
+          anchorDate: visit.scheduledDate,
+          assignedDate: lotWeeklyVisitAssignedDate(visit.scheduledDate),
+          weekStart: lotWeeklyProgramWeekStart(lotWeeklyVisitAssignedDate(visit.scheduledDate)),
           visits: []
         };
         groups.push(group);

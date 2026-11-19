@@ -97,6 +97,7 @@
         <button class="nav-item" data-page="registros"><span class="nav-icon">▤</span> Registros del dispositivo</button>
         <button class="nav-item" data-page="gestionar"><span class="nav-icon">✎</span> Administrar capturas</button>
         <button class="nav-item reviewer-nav" data-page="seguimiento-lotes" hidden><span class="nav-icon">◷</span> Seguimiento de lotes</button>
+        <button class="nav-item reviewer-nav" data-page="programacion-semanal" hidden><span class="nav-icon">◷</span> Visitas semanales</button>
         <button class="nav-item admin-nav" data-page="usuarios" hidden><span class="nav-icon">♙</span> Usuarios</button>
         <div class="side-note"><span class="sync-dot"></span><div><strong>Captura y sincronización</strong><small>Las capturas sin conexión quedan en cola y se envían al recuperar conexión.</small></div></div>
       </aside>
@@ -195,7 +196,7 @@
                 <select id="lot-weekly-filter-day" class="select-input">
                   <option value="">Todos los días</option>
                   <option value="1">Lunes</option><option value="2">Martes</option><option value="3">Miércoles</option>
-                  <option value="4">Jueves</option><option value="5">Viernes</option><option value="6">Sábado</option><option value="0">Domingo</option>
+                  <option value="4">Jueves</option><option value="5">Viernes</option><option value="6">Sábado</option>
                 </select>
               </label>
               <label class="field"><span class="field-label">Responsable</span>
@@ -354,10 +355,10 @@
         <form method="dialog" class="dialog-actions"><button class="secondary-button" type="submit">Cerrar</button></form>
       </div>
     </dialog>
-    <nav class="mobile-nav" aria-label="Navegación móvil"><button data-page="inicio" class="active"><span>⌂</span>Inicio</button><button data-page="capturar"><span>＋</span>Capturar</button><button data-page="pendientes"><span>◷</span>Pendientes</button><button data-page="registros"><span>▤</span>Registros</button><button class="reviewer-nav" data-page="seguimiento-lotes" aria-label="Seguimiento de lotes" hidden><span>◷</span>Lotes</button><button class="admin-mobile-nav" data-page="usuarios" hidden><span>♙</span>Usuarios</button></nav>
+    <nav class="mobile-nav" aria-label="Navegación móvil"><button data-page="inicio" class="active"><span>⌂</span>Inicio</button><button data-page="capturar"><span>＋</span>Capturar</button><button data-page="pendientes"><span>◷</span>Pendientes</button><button data-page="registros"><span>▤</span>Registros</button><button class="reviewer-nav" data-page="seguimiento-lotes" aria-label="Seguimiento de lotes" hidden><span>◷</span>Lotes</button><button class="reviewer-nav" data-page="programacion-semanal" aria-label="Visitas semanales" hidden><span>◷</span>Semanal</button><button class="admin-mobile-nav" data-page="usuarios" hidden><span>♙</span>Usuarios</button></nav>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </div>
   <script src="config.js"></script>
-  <script src="app.js?v=48"></script>
+  <script src="app.js?v=49"></script>
 </body>
 </html>

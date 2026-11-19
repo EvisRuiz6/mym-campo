@@ -13,7 +13,7 @@ const helpers = runInNewContext(
   '\n({ parseXlsxWorkbook, parseLotFollowupRows, excelDateToIso, evaluateLotFollowup, ' +
   'lotWeeklyProgramWeekStart, lotWeeklyProgramDay, filterLotWeeklyPrograms, ' +
   'lotWeeklyProgramCandidates, lotWeeklyProgramDateBounds, buildLotWeeklyVisitItems, filterLotWeeklyVisits, ' +
-  'groupLotWeeklyVisits, filterLotWeeklyVisitGroups, filterWeeklyScheduleGroups })',
+  'groupLotWeeklyVisits, filterLotWeeklyVisitGroups, filterWeeklyScheduleGroups, lotWeeklyVisitAssignedDate })',
   { Blob, Response, TextDecoder, DecompressionStream }
 );
 
@@ -302,6 +302,23 @@ test('groups same-farm visits within five days, assigns the earliest date, and k
     ['Finca B', '2026-03-11', '2026-03-09', ['2026-03-11']],
     ['Finca A', '2026-03-21', '2026-03-16', ['2026-03-21']]
   ]);
+});
+
+test('moves a Sunday group date to Monday without changing original dates or proximity', () => {
+  const groups = helpers.groupLotWeeklyVisits([
+    { farm: 'Finca A', lotCode: '1', visitNumber: 1, scheduledDate: '2026-03-15', responsible: 'Ana', day: 0 },
+    { farm: 'Finca A', lotCode: '2', visitNumber: 1, scheduledDate: '2026-03-20', responsible: 'Ana', day: 5 },
+    { farm: 'Finca A', lotCode: '3', visitNumber: 1, scheduledDate: '2026-03-21', responsible: 'Ana', day: 6 }
+  ]);
+  assert.equal(helpers.lotWeeklyVisitAssignedDate('2026-03-15'), '2026-03-16');
+  assert.deepEqual(JSON.parse(JSON.stringify(groups.map(group => [
+    group.assignedDate,
+    group.visits.map(visit => visit.scheduledDate)
+  ]))), [
+    ['2026-03-16', ['2026-03-15', '2026-03-20']],
+    ['2026-03-21', ['2026-03-21']]
+  ]);
+  assert.ok(groups.every(group => helpers.lotWeeklyProgramDay(group.assignedDate) !== 0));
 });
 
 test('agenda and weekly filters retain group date assignments and chronological order', () => {

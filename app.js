@@ -2833,6 +2833,7 @@ function buildLotWeeklyVisitItems(plans, visits, lotLookup, today) {
       seen.add(key);
       items.push({
         farm: lot.finca || plan.finca || 'Sin finca',
+        responsible: String(plan.responsible || '').trim(),
         lotCode,
         visitNumber: slot.number,
         scheduledDate: slot.due_date,
@@ -2843,18 +2844,20 @@ function buildLotWeeklyVisitItems(plans, visits, lotLookup, today) {
     }
   }
   return items.sort((a, b) =>
-    a.farm.localeCompare(b.farm, 'es') ||
     a.scheduledDate.localeCompare(b.scheduledDate) ||
+    a.farm.localeCompare(b.farm, 'es') ||
     a.lotCode.localeCompare(b.lotCode) ||
     a.visitNumber - b.visitNumber
   );
 }
-function filterLotWeeklyVisits(visits, farmFilter, dayFilter) {
+function filterLotWeeklyVisits(visits, farmFilter, dayFilter, responsibleFilter) {
   const farmKey = normalizeLotWeeklyFarm(farmFilter);
   const day = String(dayFilter || '');
+  const responsibleKey = String(responsibleFilter || '').trim().toLocaleLowerCase();
   return (Array.isArray(visits) ? visits : []).filter(visit =>
     (!farmKey || normalizeLotWeeklyFarm(visit.farm) === farmKey) &&
-    (!day || String(visit.day) === day)
+    (!day || String(visit.day) === day) &&
+    (!responsibleKey || String(visit.responsible || '').trim().toLocaleLowerCase() === responsibleKey)
   );
 }
 function lotWeeklyProgramWindow(referenceDate) {
@@ -3807,10 +3810,27 @@ function renderLotFollowup() {
   renderLotWeeklyPrograms();
 }
 function renderLotWeeklyPrograms() {
+  const allVisits = buildLotWeeklyVisitItems(state.lotFollowupPlans, state.lotFollowupVisits, state.lotLookup, localDate());
+  const responsibleSelect = $('#lot-weekly-filter-responsible');
+  const selectedResponsible = responsibleSelect.value;
+  const responsibleOptions = new Map();
+  allVisits.forEach(visit => {
+    const responsible = String(visit.responsible || '').trim();
+    const key = responsible.toLocaleLowerCase();
+    if (key && !responsibleOptions.has(key)) responsibleOptions.set(key, responsible);
+  });
+  responsibleSelect.innerHTML = '<option value="">Todos los responsables</option>' +
+    [...responsibleOptions.values()].sort((a, b) => a.localeCompare(b, 'es'))
+      .map(responsible => '<option value="' + esc(responsible) + '">' + esc(responsible) + '</option>').join('');
+  const matchingResponsible = [...responsibleOptions.values()].find(responsible =>
+    responsible.toLocaleLowerCase() === selectedResponsible.trim().toLocaleLowerCase()
+  );
+  if (matchingResponsible) responsibleSelect.value = matchingResponsible;
   const visits = filterLotWeeklyVisits(
-    buildLotWeeklyVisitItems(state.lotFollowupPlans, state.lotFollowupVisits, state.lotLookup, localDate()),
+    allVisits,
     $('#lot-weekly-filter-farm').value,
-    $('#lot-weekly-filter-day').value
+    $('#lot-weekly-filter-day').value,
+    responsibleSelect.value
   );
   const groups = new Map();
   visits.forEach(visit => {
@@ -3824,6 +3844,7 @@ function renderLotWeeklyPrograms() {
       '<tr><td><strong>Lote ' + esc(visit.lotCode) + '</strong></td>' +
         '<td>Visita ' + visit.visitNumber + '</td>' +
         '<td>' + esc(formatDate(visit.scheduledDate)) + '</td>' +
+        '<td>' + esc(visit.responsible || '—') + '</td>' +
         '<td><span class="lot-followup-status-pill is-' + visit.statusKey + '">' + visit.status + '</span></td></tr>'
     ).join('');
     return '<article class="lot-weekly-program-card">' +
@@ -3832,7 +3853,7 @@ function renderLotWeeklyPrograms() {
           '</strong> · Fecha programada: ' + esc(formatDate(group.scheduledDate)) +
           ' · Visitas pendientes: ' + group.visits.length + '</p></div></div>' +
       '<div class="lot-weekly-program-table-wrap"><table class="lot-weekly-program-table">' +
-        '<thead><tr><th>Lote</th><th>Visita</th><th>Fecha programada original</th><th>Estado</th></tr></thead>' +
+        '<thead><tr><th>Lote</th><th>Visita</th><th>Fecha programada original</th><th>Responsable</th><th>Estado</th></tr></thead>' +
         '<tbody>' + rows + '</tbody></table></div></article>';
   });
   $('#lot-weekly-program-list').innerHTML = cards.length
@@ -4874,6 +4895,7 @@ $('#lot-followup-search').addEventListener('input', renderLotFollowup);
 $('#lot-followup-filter').addEventListener('change', renderLotFollowup);
 $('#lot-weekly-filter-farm').addEventListener('change', renderLotWeeklyPrograms);
 $('#lot-weekly-filter-day').addEventListener('change', renderLotWeeklyPrograms);
+$('#lot-weekly-filter-responsible').addEventListener('change', renderLotWeeklyPrograms);
 $('#lot-weekly-program-refresh').addEventListener('click', () => loadLotFollowup().catch(handleLotFollowupError));
 $('#lot-followup-import').addEventListener('change', async event => {
   const input = event.currentTarget;

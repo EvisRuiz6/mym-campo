@@ -251,9 +251,9 @@ test('existing weekly-program members keep their saved reference date if the pla
 
 test('weekly agenda includes overdue and pending first-three visits but excludes completed and duplicates', () => {
   const plans = [
-    { lot_code: '1', cycle_date: '2026-01-01', visit_dates: ['2026-11-10', '2026-11-17', '2026-11-24', '2026-12-01'] },
-    { lot_code: '1', cycle_date: '2026-01-01', visit_dates: ['2026-11-10', '2026-11-17', '2026-11-24'] },
-    { lot_code: '2', cycle_date: '2026-01-01', visit_dates: ['2026-11-17'] }
+    { lot_code: '1', cycle_date: '2026-01-01', responsible: 'Carlos', visit_dates: ['2026-11-10', '2026-11-17', '2026-11-24', '2026-12-01'] },
+    { lot_code: '1', cycle_date: '2026-01-01', responsible: 'Carlos', visit_dates: ['2026-11-10', '2026-11-17', '2026-11-24'] },
+    { lot_code: '2', cycle_date: '2026-01-01', responsible: 'Ana', visit_dates: ['2026-11-17'] }
   ];
   const visits = [
     { record_id: 'completed-1', lot_code: '1', visit_date: '2026-11-12' },
@@ -269,11 +269,17 @@ test('weekly agenda includes overdue and pending first-three visits but excludes
     item.lotCode, item.visitNumber, item.scheduledDate, item.status, item.farm
   ]))), [
     ['0000001', 2, '2026-11-17', 'Vencida', 'Finca A'],
-    ['0000001', 3, '2026-11-24', 'Pendiente', 'Finca A'],
-    ['0000002', 1, '2026-11-17', 'Vencida', 'Finca B']
+    ['0000002', 1, '2026-11-17', 'Vencida', 'Finca B'],
+    ['0000001', 3, '2026-11-24', 'Pendiente', 'Finca A']
   ]);
   assert.deepEqual(
     JSON.parse(JSON.stringify(helpers.filterLotWeeklyVisits(items, 'finca a', '2').map(item => item.visitNumber))),
     [2, 3]
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(helpers.filterLotWeeklyVisits(items, '', '', 'Ana').map(item => [
+      item.lotCode, item.scheduledDate, item.responsible
+    ]))),
+    [['0000002', '2026-11-17', 'Ana']]
   );
 });

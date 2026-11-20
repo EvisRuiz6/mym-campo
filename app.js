@@ -3987,7 +3987,8 @@ function captureWeedsLocation(root) {
 }
 function renderUsers(users, zones) {
   $('#users-list').innerHTML = users.slice().sort((a, b) => a.display_name.localeCompare(b.display_name, 'es')).map(user =>
-    '<article class="user-row"><span class="user-avatar">' + esc(initials(user.display_name)) + '</span><span class="user-info"><strong>' + esc(user.display_name) + '</strong><small>' + esc((user.email || 'Sin correo') + ' · ' + user.username + ' · ' + (user.status === 'active' ? 'Activa' : user.status === 'suspended' ? 'Suspendida' : 'Pendiente')) + '</small></span><span class="member-actions"><select class="select-input" data-member-role="' + esc(user.id) + '" data-original-role="' + esc(user.role) + '" aria-label="Perfil para ' + esc(user.display_name) + '">' + ROLE_OPTIONS.map(role => '<option value="' + role + '"' + (user.role === role ? ' selected' : '') + '>' + esc(roleName(role)) + '</option>').join('') + '</select></span><details class="member-zone-picker"' + (['admin', 'aereo'].includes(user.role) ? ' hidden' : '') + '><summary>' + (['admin', 'aereo'].includes(user.role) ? 'Todas las zonas' : 'Zonas permitidas (' + (user.allowed_zones || []).length + ')') + '</summary><div class="zone-checkboxes">' + zones.map(zone => '<label><input type="checkbox" data-member-zone="' + esc(user.id) + '" value="' + esc(zone) + '"' + ((user.allowed_zones || []).some(userZone => normalizeZoneValue(userZone).toLowerCase() === normalizeZoneValue(zone).toLowerCase()) ? ' checked' : '') + '> ' + esc(zone) + '</label>').join('') + '</div></details><button class="secondary-button" type="button" data-member-save="' + esc(user.id) + '">Guardar</button></article>'
+    '<article class="user-row"><span class="user-avatar">' + esc(initials(user.display_name)) + '</span><span class="user-info"><strong>' + esc(user.display_name) + '</strong><small>' + esc((user.email || 'Sin correo') + ' · ' + user.username + ' · ' + (user.status === 'active' ? 'Activa' : user.status === 'suspended' ? 'Suspendida' : 'Pendiente')) + '</small></span><span class="member-actions"><select class="select-input" data-member-role="' + esc(user.id) + '" data-original-role="' + esc(user.role) + '" aria-label="Perfil para ' + esc(user.display_name) + '">' + ROLE_OPTIONS.map(role => '<option value="' + role + '"' + (user.role === role ? ' selected' : '') + '>' + esc(roleName(role)) + '</option>').join('') + '</select></span><details class="member-zone-picker"' + (['admin', 'aereo'].includes(user.role) ? ' hidden' : '') + '><summary>' + (['admin', 'aereo'].includes(user.role) ? 'Todas las zonas' : 'Zonas permitidas (' + (user.allowed_zones || []).length + ')') + '</summary><div class="zone-checkboxes">' + zones.map(zone => '<label><input type="checkbox" data-member-zone="' + esc(user.id) + '" value="' + esc(zone) + '"' + ((user.allowed_zones || []).some(userZone => normalizeZoneValue(userZone).toLowerCase() === normalizeZoneValue(zone).toLowerCase()) ? ' checked' : '') + '> ' + esc(zone) + '</label>').join('') + '</div></details><button class="secondary-button" type="button" data-member-save="' + esc(user.id) + '">Guardar</button>' +
+    (user.id === state.user.id ? '' : '<button class="secondary-button member-delete" type="button" data-member-delete="' + esc(user.id) + '" data-member-name="' + esc(user.display_name) + '" aria-label="Eliminar usuario ' + esc(user.display_name) + '">Eliminar</button>') + '</article>'
   ).join('') || emptyState('Aún no hay cuentas.');
 }
 async function fetchUserZones() {
@@ -4014,7 +4015,7 @@ async function refreshUsers() {
   $('#users-load-status').hidden = false;
   const loadPromise = (async () => {
     const [usersResult, zonesResult] = await Promise.allSettled([
-      cloudRequest('profiles?select=id,email,username,display_name,role,status,allowed_zones&order=created_at.asc'),
+      cloudRequest('profiles?select=id,email,username,display_name,role,status,allowed_zones&auth_user_id=not.is.null&order=created_at.asc'),
       fetchUserZones()
     ]);
     if (state.usersLoadPromise !== loadPromise || !state.user || state.user.id !== userId || !isActiveAdmin()) return;
@@ -5409,6 +5410,11 @@ document.addEventListener('click', event => {
     saveMemberRole(memberButton.dataset.memberSave).catch(handleCloudError);
     return;
   }
+  const memberDeleteButton = event.target.closest('[data-member-delete]');
+  if (memberDeleteButton) {
+    deleteMember(memberDeleteButton).catch(handleCloudError);
+    return;
+  }
   const childAdd = event.target.closest('[data-add-child]');
   if (childAdd) { addChildRow(childAdd.dataset.addChild); return; }
   const childRemove = event.target.closest('[data-remove-child]');
@@ -5844,6 +5850,24 @@ async function saveMemberRole(userId) {
   authMessage('user-create-message', 'Perfil actualizado.');
   $('#user-create-message').classList.add('success-message');
   await refreshUsers();
+}
+async function deleteMember(button) {
+  if (!isActiveAdmin()) throw new Error('Solo un administrador activo puede eliminar usuarios.');
+  const userId = button.dataset.memberDelete;
+  if (userId === state.user.id) throw new Error('No puedes eliminar tu propia cuenta.');
+  if (!window.confirm('¿Eliminar la cuenta de ' + button.dataset.memberName +
+      '? La persona perderá el acceso. Sus capturas y su historial de visitas se conservarán.')) return;
+  button.disabled = true;
+  try {
+    await apiRequest('/functions/v1/delete-user', {
+      method: 'POST', token: await accessToken(), body: { user_id: userId }
+    });
+    authMessage('user-create-message', 'Cuenta eliminada. Sus capturas y visitas se conservaron.');
+    $('#user-create-message').classList.add('success-message');
+    await refreshUsers();
+  } finally {
+    button.disabled = false;
+  }
 }
 async function reviewRecord(recordId, decision) {
   if (!['approved', 'rejected'].includes(decision) || !isActiveAdmin()) return;

@@ -68,8 +68,8 @@ begin
   if not exists (select 1 from public.field_records where id = current_setting('test.supervisor_flight')::uuid) then
     raise exception 'Supervisor cannot see their own flight';
   end if;
-  if not exists (select 1 from public.field_records where id = current_setting('test.other_record')::uuid) then
-    raise exception 'Supervisor lost access to an authorized non-flight record';
+  if exists (select 1 from public.field_records where id = current_setting('test.other_record')::uuid) then
+    raise exception 'Supervisor can see another user non-flight record';
   end if;
   begin
     perform public.review_field_record(current_setting('test.first_flight')::uuid, 'approved');

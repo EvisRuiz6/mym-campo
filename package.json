@@ -1,0 +1,10 @@
+{
+  "name": "mym-campo",
+  "private": true,
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "exceljs": "4.4.0"
+  }
+}

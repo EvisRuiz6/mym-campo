@@ -14,7 +14,7 @@ const helperCode = extract('function flightNumber(value)', '\nfunction flightFie
 const helpers = runInNewContext(helperCode +
   '\n({ flightReportData, flightVariationScopedRecords, flightRecordBelongsToUser, flightReportFilterOptions, formatFlightReportNumber, flightReportDate, flightReportValue, flightNumber })');
 const merge = runInNewContext(
-  extract('function mergeFlightVariationRecords(', '\nfunction resetFlightVariation()') + '\nmergeFlightVariationRecords',
+  extract('function mergeScopedReportRecords(', '\nfunction resetFlightVariation()') + '\nmergeScopedReportRecords',
   { flightVariationScopedRecords: helpers.flightVariationScopedRecords, flightRecordBelongsToUser: helpers.flightRecordBelongsToUser }
 );
 const owner = { id: 'one', username: 'uno', role: 'aereo', status: 'active' };
@@ -84,7 +84,7 @@ test('requests own flights on the server and rejects a different owner even if r
       state, $: selector => controls[selector], navigator: { onLine: true },
       getRecords: async () => [], recordHasLotAccess: () => true,
       cloudRequest: async path => { paths.push(path); return [flight('mine', 'one'), flight('other', 'two')]; },
-      mapCloudRecord: row => row, mergeFlightVariationRecords: merge,
+      mapCloudRecord: row => row, mergeScopedReportRecords: merge,
       updateFlightVariationOptions() {}, renderFlightVariation() { rendered++; }, console
     }
   );
@@ -107,7 +107,7 @@ test('reports server failure instead of presenting stale totals as current', asy
       state, $: selector => controls[selector], navigator: { onLine: true },
       getRecords: async () => [], recordHasLotAccess: () => true,
       cloudRequest: async () => { throw new Error('red'); }, mapCloudRecord: row => row,
-      mergeFlightVariationRecords: merge, updateFlightVariationOptions() {}, renderFlightVariation() {},
+      mergeScopedReportRecords: merge, updateFlightVariationOptions() {}, renderFlightVariation() {},
       console: { error() {} }
     }
   );
@@ -129,7 +129,7 @@ test('discards an in-flight response when the active session changes', async () 
     {
       state, $: selector => controls[selector], navigator: { onLine: true },
       getRecords: async () => [], recordHasLotAccess: () => true,
-      cloudRequest: async () => response, mapCloudRecord: row => row, mergeFlightVariationRecords: merge,
+      cloudRequest: async () => response, mapCloudRecord: row => row, mergeScopedReportRecords: merge,
       updateFlightVariationOptions() {}, renderFlightVariation() { rendered++; }, console
     }
   );
@@ -145,10 +145,10 @@ test('discards an in-flight response when the active session changes', async () 
 
 test('does not display another user flight in the regular local record lists', () => {
   const visible = runInNewContext(
-    extract('function visibleLocalRecords(records)', "\n$('#flight-variation-filters')") + '\nvisibleLocalRecords',
+    extract('function visibleLocalRecords(records)', "\n$('#climate-chart-filters')") + '\nvisibleLocalRecords',
     { state: { user: { ...owner, role: 'supervisor' } }, recordHasLotAccess: () => true,
       isActiveAdmin: () => false, flightRecordBelongsToUser: helpers.flightRecordBelongsToUser }
   );
   const rows = [flight('own', 'one'), flight('other', 'two'), { id: 'other-malezas', tipo: 'malezas', syncStatus: 'synced' }];
-  assert.deepEqual(plain(visible(rows).map(row => row.id)), ['own', 'other-malezas']);
+  assert.deepEqual(plain(visible(rows).map(row => row.id)), ['own']);
 });

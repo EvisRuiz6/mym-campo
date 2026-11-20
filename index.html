@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#174b38">
   <meta name="description" content="Captura de labores aéreas y terrestres para MyM Data">
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="app.css?v=26">
+  <link rel="stylesheet" href="app.css?v=28">
   <title>MyM Campo</title>
 </head>
 <body>
@@ -104,6 +104,7 @@
           <button class="nav-item" data-page="registros"><span class="nav-icon">▤</span> Registros</button>
           <button class="nav-item" data-page="gestionar"><span class="nav-icon">✎</span> Administrar capturas</button>
           <button class="nav-item" data-page="variacion-vuelo"><span class="nav-icon">▥</span> Variación por vuelo</button>
+          <button class="nav-item" data-page="clima-grafica"><span class="nav-icon">☀</span> Gráfica de clima</button>
         </details>
         <details class="nav-group reviewer-nav" data-menu-group="seguimiento" open hidden>
           <summary>Seguimiento</summary>
@@ -113,6 +114,7 @@
         <details class="nav-group admin-nav" data-menu-group="administracion" open hidden>
           <summary>Administración</summary>
           <button class="nav-item" data-page="usuarios"><span class="nav-icon">♙</span> Usuarios</button>
+          <button class="nav-item" data-page="exportar-excel"><span class="nav-icon">▤</span> Exportar Excel</button>
         </details>
         <div class="side-note"><span class="sync-dot"></span><div><strong>Captura y sincronización</strong><small>Las capturas sin conexión quedan en cola y se envían al recuperar conexión.</small></div></div>
       </aside>
@@ -151,7 +153,7 @@
         </section>
 
         <section id="page-registros" class="page" hidden>
-          <p class="eyebrow">REGISTROS COMPARTIDOS</p><h1>Registros</h1><p class="subtitle">Cada usuario ve sus capturas; supervisores y administradores pueden revisar las del equipo.</p>
+          <p class="eyebrow">REGISTROS COMPARTIDOS</p><h1>Registros</h1><p class="subtitle">Cada usuario ve sus capturas; el administrador puede consultar las del equipo.</p>
           <p class="record-query-hint">Selecciona “Ver datos” para consultar la información completa de una captura guardada o sincronizada.</p>
           <div class="record-toolbar"><label class="search-field">⌕ <input id="record-search" type="search" placeholder="Buscar por finca, actividad o responsable" aria-label="Buscar registros"></label><button class="secondary-button" data-goto="gestionar" type="button">Administrar capturas</button><button id="open-visit-map" class="secondary-button" type="button" hidden>Mapa de muestreos</button><button id="export-all" class="secondary-button" type="button">Exportar JSON</button></div>
           <div id="all-records" class="record-list"></div>
@@ -160,7 +162,7 @@
         <section id="page-gestionar" class="page" hidden>
           <button class="back-link" data-goto="registros" type="button">← Registros</button>
           <p class="eyebrow">GESTIÓN DE CAPTURAS</p><h1>Administrar capturas</h1>
-          <p class="subtitle">Edita o elimina tus capturas. Las personas administradoras pueden gestionar todas; los supervisores conservan la revisión de capturas ajenas.</p>
+          <p class="subtitle">Edita o elimina tus capturas. Las personas administradoras pueden gestionar todas.</p>
           <p class="record-query-hint">Los cambios de registros sincronizados requieren conexión. Las capturas que siguen en cola pueden editarse o eliminarse sin conexión; editar una captura revisada la devuelve a revisión pendiente.</p>
           <div class="record-toolbar"><label class="search-field">⌕ <input id="manage-record-search" type="search" placeholder="Buscar por finca, actividad o responsable" aria-label="Buscar capturas para administrar"></label><span id="manage-record-total" class="muted-inline">0 capturas</span></div>
           <div id="manage-record-list" class="record-list"></div>
@@ -185,6 +187,25 @@
           <section id="flight-variation-details" class="flight-variation-details" aria-live="polite"></section>
         </section>
 
+        <section id="page-clima-grafica" class="page" hidden>
+          <p class="eyebrow">APLICACIONES AÉREAS</p>
+          <h1>Clima</h1>
+          <p class="subtitle">Consulta cada medición a lo largo del tiempo. Selecciona un punto o una lectura para ver sus datos.</p>
+          <div id="climate-chart-filters" class="flight-variation-filters">
+            <div class="field"><label class="field-label" for="climate-chart-variable">Variable</label><select id="climate-chart-variable" class="select-input"></select></div>
+            <div class="field"><label class="field-label" for="climate-chart-from">Desde</label><input id="climate-chart-from" class="text-input" type="date"></div>
+            <div class="field"><label class="field-label" for="climate-chart-to">Hasta</label><input id="climate-chart-to" class="text-input" type="date"></div>
+            <div class="field"><label class="field-label" for="climate-chart-farm">Finca</label><select id="climate-chart-farm" class="select-input"><option value="">Todas las fincas</option></select></div>
+            <div class="field"><label class="field-label" for="climate-chart-zone">Zona</label><select id="climate-chart-zone" class="select-input"><option value="">Todas las zonas</option></select></div>
+            <div id="climate-chart-owner-field" class="field" hidden><label class="field-label" for="climate-chart-owner">Usuario</label><select id="climate-chart-owner" class="select-input"><option value="">Todos los usuarios</option></select></div>
+          </div>
+          <div class="climate-chart-toolbar"><strong id="climate-chart-count">0 mediciones</strong><button id="climate-chart-refresh" class="secondary-button" type="button">Actualizar datos</button></div>
+          <p id="climate-chart-status" class="field-hint" role="status" aria-live="polite">Carga las lecturas para consultar la gráfica.</p>
+          <div id="climate-chart-plot" class="climate-chart-plot"></div>
+          <section id="climate-chart-details" class="climate-chart-details" aria-live="polite"></section>
+          <section class="climate-chart-readings"><h2>Lecturas</h2><p class="field-hint">Cada medición aparece por separado, incluso si comparte fecha y hora con otra.</p><div id="climate-chart-list"></div></section>
+        </section>
+
         <section id="page-seguimiento-lotes" class="page" hidden>
           <p class="eyebrow">GESTIÓN DE CICLOS Y VISITAS</p>
           <h1>Seguimiento de lotes</h1>
@@ -194,7 +215,7 @@
           </div>
           <div id="lot-followup-summary" class="lot-followup-summary" aria-live="polite"></div>
 
-          <section class="form-section lot-followup-form-section">
+          <section class="form-section lot-followup-form-section" data-admin-only hidden>
             <div class="section-heading">
               <div><p class="eyebrow">PLAN POR LOTE</p><h2 id="lot-followup-form-title">Registrar lote</h2></div>
             </div>
@@ -229,9 +250,9 @@
               <option value="unscheduled">Sin visitas programadas</option>
             </select>
             <button id="lot-followup-refresh" class="secondary-button" type="button">Actualizar</button>
-            <label class="secondary-button lot-followup-import-button" for="lot-followup-import">Importar Excel<input id="lot-followup-import" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden></label>
+            <label class="secondary-button lot-followup-import-button" for="lot-followup-import" data-admin-only hidden>Importar Excel<input id="lot-followup-import" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden></label>
           </div>
-          <p class="record-query-hint">El archivo debe incluir FECHA SIEMBRA/CORTE, FINCA, LOTE, ESTADO, RESPONSABLE y las fechas VISITA 1, VISITA 2, VISITA 3. La importación procesa la primera hoja.</p>
+          <p class="record-query-hint" data-admin-only hidden>El archivo debe incluir FECHA SIEMBRA/CORTE, FINCA, LOTE, ESTADO, RESPONSABLE y las fechas VISITA 1, VISITA 2, VISITA 3. La importación procesa la primera hoja.</p>
           <div class="lot-followup-table-wrap">
             <table class="lot-followup-table">
               <thead><tr><th>Finca / lote</th><th>Siembra / corte</th><th>Estado</th><th>Responsable</th><th>Visitas</th><th>Próxima visita</th><th>Seguimiento</th><th>Acciones</th></tr></thead>
@@ -267,6 +288,25 @@
           <div id="lot-weekly-program-list" class="lot-weekly-program-list">
             <p class="lot-followup-empty">Carga los planes y las visitas para consultar la programación semanal.</p>
           </div>
+        </section>
+
+        <section id="page-exportar-excel" class="page" hidden>
+          <p class="eyebrow">ADMINISTRACIÓN</p><h1>Exportar capturas</h1>
+          <p class="subtitle">Descarga las capturas sincronizadas en un archivo Excel con una hoja por módulo.</p>
+          <form id="excel-export-form" class="form-section">
+            <fieldset class="excel-modules"><legend class="field-label">Módulos a incluir</legend><div id="excel-export-modules" class="excel-module-options"></div></fieldset>
+            <div class="flight-variation-filters">
+              <div class="field"><label class="field-label" for="excel-from">Desde</label><input id="excel-from" class="text-input" type="date"></div>
+              <div class="field"><label class="field-label" for="excel-to">Hasta</label><input id="excel-to" class="text-input" type="date"></div>
+              <div class="field"><label class="field-label" for="excel-farm">Finca</label><input id="excel-farm" class="text-input" placeholder="Nombre exacto"></div>
+              <div class="field"><label class="field-label" for="excel-zone">Zona</label><input id="excel-zone" class="text-input" placeholder="Zona exacta"></div>
+              <div class="field"><label class="field-label" for="excel-labor">Labor</label><input id="excel-labor" class="text-input" placeholder="Labor exacta"></div>
+              <div class="field"><label class="field-label" for="excel-owner">Usuario</label><input id="excel-owner" class="text-input" placeholder="Nombre de usuario exacto"></div>
+            </div>
+            <p class="field-hint">Los filtros de texto no distinguen mayúsculas ni acentos. Las capturas sin el dato filtrado no se incluyen. Se exportan nombres y metadatos de los adjuntos, no las imágenes.</p>
+            <button id="excel-export-submit" class="primary-button" type="submit">Descargar Excel</button>
+            <p id="excel-export-status" class="field-hint excel-export-status" role="status" aria-live="polite"></p>
+          </form>
         </section>
 
         <section id="page-usuarios" class="page" hidden>
@@ -398,6 +438,8 @@
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </div>
   <script src="config.js"></script>
-  <script src="app.js?v=55"></script>
+  <script src="vendor/exceljs-4.4.0.min.js"></script>
+  <script src="excel-export.js?v=1"></script>
+  <script src="app.js?v=57"></script>
 </body>
 </html>

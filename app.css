@@ -272,6 +272,31 @@ dialog::backdrop { background: #17241c88; }
 .flight-variation-flight { margin-top: 10px; padding: 12px; background: var(--white); border: 1px solid var(--line); border-radius: 9px; }
 .flight-variation-flight summary { min-height: 44px; cursor: pointer; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
 .flight-variation-flight .record-detail-grid { margin-top: 12px; }
+.climate-chart-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+#climate-chart-status { margin: 14px 0; line-height: 1.5; }
+.climate-chart-plot { min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: 11px; background: var(--white); }
+.climate-axis-title { font-weight: 700; overflow-wrap: anywhere; }
+.climate-chart-plot svg { display: block; width: 100%; max-height: 500px; }
+.climate-chart-plot svg text { font-size: 12px; fill: #405448; }
+.climate-axis { stroke: #8ca797; stroke-width: 1; }
+.climate-line { fill: none; stroke: #18833e; stroke-width: 2; }
+.climate-point { cursor: pointer; }
+.climate-point-hit { fill: transparent; }
+.climate-point-dot { fill: #126a32; stroke: white; stroke-width: 1; }
+.climate-point:focus { outline: none; }
+.climate-point:focus .climate-point-dot { stroke: #172f21; stroke-width: 3; }
+.climate-chart-details, .climate-chart-readings { margin-top: 24px; }
+.climate-chart-details h2, .climate-chart-readings h2 { font-size: 19px; }
+#climate-chart-list { display: grid; gap: 8px; }
+.climate-reading { min-height: 48px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--white); color: var(--ink); text-align: left; line-height: 1.4; overflow-wrap: anywhere; cursor: pointer; }
+.climate-reading:hover, .climate-reading[aria-pressed="true"] { border-color: #63926d; background: #edf5ee; }
+.climate-reading:focus-visible { outline: 3px solid #63926d; }
+.excel-modules { border: 0; margin: 0; padding: 0; min-width: 0; }
+.excel-modules legend { margin-bottom: 10px; }
+.excel-module-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
+.excel-module-options label { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; }
+.excel-module-options input { width: 20px; height: 20px; }
+.excel-export-status { min-height: 1.5em; margin: 12px 0 0; overflow-wrap: anywhere; }
 .record-detail-card { padding: 22px; }
 .record-detail-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
 .record-detail-heading h2 { margin: 0; font-size: 19px; }

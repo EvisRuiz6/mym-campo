@@ -5,7 +5,7 @@ const PROFILE_KEY = 'mym-campo-auth-profile';
 const INVITE_PENDING_KEY = 'mym-campo-invite-pending';
 const LOT_LOOKUP_CACHE_KEY = 'mym-campo-lot-lookup:';
 const WORKSPACE_MENU_KEY = 'mym-campo-workspace-menu:';
-const WORKSPACE_PAGES = ['inicio', 'capturar', 'pendientes', 'registros', 'gestionar', 'variacion-vuelo', 'seguimiento-lotes', 'programacion-semanal', 'usuarios'];
+const WORKSPACE_PAGES = ['inicio', 'capturar', 'pendientes', 'registros', 'gestionar', 'variacion-vuelo', 'clima-grafica', 'seguimiento-lotes', 'programacion-semanal', 'usuarios', 'exportar-excel'];
 const NO_EMAIL_AUTH_DOMAIN = 'users.mym-campo.invalid';
 const ROLE_OPTIONS = ['aereo', 'terrestre', 'supervisor', 'admin'];
 const modules = {
@@ -215,7 +215,7 @@ const childSchemas = {
 };
 const $ = (selector, root) => (root || document).querySelector(selector);
 const $$ = (selector, root) => [...(root || document).querySelectorAll(selector)];
-const state = { db: null, user: null, authSession: null, configured: false, syncConnected: false, syncBusy: false, syncIdleWaiters: [], syncRequested: false, flightActivityLaborBusy: false, flightActivityLaborQueue: Promise.resolve(), flightActivityLaborUpdatePromise: null, refreshPromise: null, currentModule: null, editingRecord: null, recordTimeTimer: null, lotLookup: Object.create(null), lotLookupRequests: new Map(), zoneOptions: [], zonesReady: false, usersLoadPromise: null, visitMap: null, flightReportRecords: [], flightVariationRecords: [], flightVariationLoadSeq: 0, flightVariationDrone: '', flightVariationSource: '', acceptingInvite: false, lotFollowupPlans: [], lotFollowupVisits: [], lotWeeklyPrograms: [], lotFollowupLoadPromise: null, lotFollowupDateId: 0, editingLotFollowup: null, editingLotWeeklyProgramId: null, lotWeeklyProgramDraftKey: '', lotWeeklyProgramDraftLotCodes: [] };
+const state = { db: null, user: null, authSession: null, configured: false, syncConnected: false, syncBusy: false, syncIdleWaiters: [], syncRequested: false, flightActivityLaborBusy: false, flightActivityLaborQueue: Promise.resolve(), flightActivityLaborUpdatePromise: null, refreshPromise: null, currentModule: null, editingRecord: null, recordTimeTimer: null, lotLookup: Object.create(null), lotLookupRequests: new Map(), zoneOptions: [], zonesReady: false, usersLoadPromise: null, visitMap: null, flightReportRecords: [], flightVariationRecords: [], flightVariationLoadSeq: 0, flightVariationDrone: '', flightVariationSource: '', climateRecords: [], climateLoadSeq: 0, climateSelected: '', climateSource: '', acceptingInvite: false, lotFollowupPlans: [], lotFollowupVisits: [], lotWeeklyPrograms: [], lotFollowupLoadPromise: null, lotFollowupDateId: 0, editingLotFollowup: null, editingLotWeeklyProgramId: null, lotWeeklyProgramDraftKey: '', lotWeeklyProgramDraftLotCodes: [] };
 
 function lotLookupCacheKey() {
   const scopeKey = [state.user.role, ...(state.user.allowedZones || []).slice().sort()].join(':');
@@ -2461,15 +2461,259 @@ function handleFlightReportError(error) {
   $('#flight-report-status').textContent = error.message || 'No se pudieron cargar las capturas de Vuelos.';
   toast('No se pudo actualizar el resumen de Vuelos.');
 }
-function mergeFlightVariationRecords(remote, local, user, offline) {
-  const cached = flightVariationScopedRecords(local, user);
+const CLIMATE_VARIABLES = Object.freeze({
+  temperatura: { label: 'Temperatura', unit: '°C' },
+  humedad: { label: 'Humedad', unit: '%' },
+  viento: { label: 'Velocidad del viento', unit: 'km/h' },
+  delta_t: { label: 'Delta T', unit: '°C' }
+});
+function climateScopedRecords(records, user) {
+  if (!user || user.status !== 'active') return [];
+  return records.filter(record => record && record.tipo === 'clima' && record.syncStatus !== 'delete-pending' &&
+    (user.role === 'admin' || flightRecordBelongsToUser(record, user)));
+}
+function climateNumeric(value) {
+  if ((typeof value !== 'string' && typeof value !== 'number') || String(value).trim() === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+function climateTimestamp(date, time) {
+  const validDate = flightReportDate(date);
+  const match = /^([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?$/.exec(String(time || '').trim());
+  if (!validDate || !match) return null;
+  return Date.parse(validDate + 'T' + match[1] + ':' + match[2] + ':' + (match[3] || '00') + 'Z');
+}
+function climateReadings(records, filters) {
+  const selected = filters || {};
+  const from = selected.from ? flightReportDate(selected.from) : '';
+  const to = selected.to ? flightReportDate(selected.to) : '';
+  const invalidDateRange = !!((selected.from && !from) || (selected.to && !to) || (from && to && from > to));
+  const result = { rows: [], invalidDateRange, missingDateExcluded: 0, missingReadings: 0 };
+  if (invalidDateRange) return result;
+  for (const record of records) {
+    const data = record.datos || {};
+    const date = flightReportDate(flightReportValue(record, 'fecha'));
+    if (selected.owner && flightRecordOwnerKey(record) !== selected.owner) continue;
+    if (selected.finca && flightReportNormalize(flightReportValue(record, 'finca')) !== flightReportNormalize(selected.finca)) continue;
+    if (selected.zona && flightReportNormalize(flightReportValue(record, 'zona')) !== flightReportNormalize(selected.zona)) continue;
+    if ((from || to) && !date) { result.missingDateExcluded++; continue; }
+    if ((from && date < from) || (to && date > to)) continue;
+    if (!Array.isArray(data.lecturas) || !data.lecturas.length) { result.missingReadings++; continue; }
+    data.lecturas.forEach((reading, index) => {
+      const values = reading && typeof reading === 'object' && !Array.isArray(reading) ? reading : {};
+      result.rows.push({ key: String(record.id) + ':' + index, record, values, date,
+        time: typeof values.hora === 'string' ? values.hora.trim() : '',
+        timestamp: climateTimestamp(date, values.hora) });
+    });
+  }
+  result.rows.sort((a, b) => (a.timestamp === null ? Infinity : a.timestamp) -
+    (b.timestamp === null ? Infinity : b.timestamp));
+  return result;
+}
+function climateVariables(records) {
+  const variables = new Map(Object.entries(CLIMATE_VARIABLES));
+  for (const record of records) {
+    const readings = record.datos && record.datos.lecturas;
+    if (!Array.isArray(readings)) continue;
+    for (const reading of readings) {
+      if (!reading || typeof reading !== 'object' || Array.isArray(reading)) continue;
+      for (const [key, value] of Object.entries(reading)) {
+        if (!variables.has(key) && !['hora', 'direccion', 'fecha', 'id'].includes(key) && climateNumeric(value) !== null) {
+          variables.set(key, { label: recordDetailLabel(key), unit: '' });
+        }
+      }
+    }
+  }
+  return variables;
+}
+function resetClimateChart() {
+  state.climateLoadSeq += 1;
+  state.climateRecords = [];
+  state.climateRows = [];
+  state.climateSelected = '';
+  state.climateSource = '';
+  for (const id of ['climate-chart-from', 'climate-chart-to', 'climate-chart-farm', 'climate-chart-zone', 'climate-chart-owner']) $('#' + id).value = '';
+  $('#climate-chart-variable').innerHTML = '';
+  $('#climate-chart-owner-field').hidden = true;
+  $('#climate-chart-refresh').disabled = false;
+  $('#climate-chart-count').textContent = '0 mediciones';
+  $('#climate-chart-status').textContent = 'Carga las lecturas para consultar la gráfica.';
+  $('#climate-chart-plot').innerHTML = '';
+  $('#climate-chart-details').innerHTML = '';
+  $('#climate-chart-list').innerHTML = '';
+}
+function updateClimateOptions() {
+  const records = climateScopedRecords(state.climateRecords, state.user);
+  const variable = $('#climate-chart-variable');
+  const previousVariable = variable.value;
+  const variables = climateVariables(records);
+  variable.innerHTML = [...variables].map(([key, item]) => '<option value="' + esc(key) + '">' +
+    esc(item.label + (item.unit ? ' (' + item.unit + ')' : '')) + '</option>').join('');
+  variable.value = variables.has(previousVariable) ? previousVariable : 'temperatura';
+  for (const field of ['finca', 'zona']) {
+    const select = $('#climate-chart-' + (field === 'finca' ? 'farm' : 'zone'));
+    const previous = select.value;
+    const values = new Map();
+    for (const record of records) {
+      const value = flightReportValue(record, field);
+      if (value && !values.has(flightReportNormalize(value))) values.set(flightReportNormalize(value), value);
+    }
+    const options = [...values.values()].sort((a, b) => a.localeCompare(b, 'es'));
+    select.innerHTML = '<option value="">Todas las ' + (field === 'finca' ? 'fincas' : 'zonas') + '</option>' +
+      options.map(value => '<option value="' + esc(value) + '">' + esc(value) + '</option>').join('');
+    select.value = options.includes(previous) ? previous : '';
+  }
+  const owner = $('#climate-chart-owner');
+  const previousOwner = owner.value;
+  const owners = new Map();
+  for (const record of records) {
+    const key = flightRecordOwnerKey(record);
+    if (key && !owners.has(key)) owners.set(key, record.ownerName && record.ownerUsername
+      ? record.ownerName + ' (@' + record.ownerUsername + ')' : record.ownerName || record.ownerUsername || 'Usuario');
+  }
+  owner.innerHTML = '<option value="">Todos los usuarios</option>' +
+    [...owners].sort((a, b) => a[1].localeCompare(b[1], 'es'))
+      .map(([key, label]) => '<option value="' + esc(key) + '">' + esc(label) + '</option>').join('');
+  owner.value = owners.has(previousOwner) ? previousOwner : '';
+  $('#climate-chart-owner-field').hidden = !isActiveAdmin();
+}
+function climateReadingLabel(row) {
+  return (row.date ? formatDate(row.date) : 'Sin fecha válida') + ' · ' +
+    (/^([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?$/.test(row.time) ? row.time : (row.time ? 'Hora no válida: ' + row.time : 'Sin hora válida')) +
+    ' · ' + (flightReportValue(row.record, 'finca') || 'Sin finca') +
+    ' · ' + (flightReportValue(row.record, 'zona') || 'Sin zona');
+}
+function renderClimateDetails(row) {
+  const detail = $('#climate-chart-details');
+  if (!row) { detail.innerHTML = '<p class="field-hint">Selecciona una lectura para ver sus datos.</p>'; return; }
+  const data = row.record.datos || {};
+  const location = data.ubicacion || data['UBICACIÓN'] || (data.latitud && data.longitud ? data.latitud + ', ' + data.longitud : 'Sin ubicación GPS');
+  const entries = [
+    ['Fecha', row.date ? formatDate(row.date) : 'Sin fecha válida'],
+    ['Hora', row.time || 'Sin hora'],
+    ['Finca', flightReportValue(row.record, 'finca') || 'Sin finca'],
+    ['Zona', flightReportValue(row.record, 'zona') || 'Sin zona'],
+    ['Lote', data.lote || data.LOTE || 'Sin lote'],
+    ['Ubicación', location],
+    ['Usuario', row.record.ownerName || row.record.ownerUsername || 'Usuario']
+  ];
+  for (const [key, value] of Object.entries(row.values)) {
+    if (key === 'hora') continue;
+    const variable = CLIMATE_VARIABLES[key];
+    entries.push([variable ? variable.label : recordDetailLabel(key),
+      value === null || value === undefined || String(value).trim() === '' ? 'Sin dato' :
+        String(value) + (variable && variable.unit ? ' ' + variable.unit : '')]);
+  }
+  detail.innerHTML = '<h2>Detalle de la medición</h2><dl class="record-detail-grid">' +
+    entries.map(([label, value]) => '<div class="record-detail-item"><dt>' + esc(label) + '</dt><dd>' + esc(String(value)) + '</dd></div>').join('') + '</dl>';
+}
+function renderClimateChart() {
+  const records = climateScopedRecords(state.climateRecords, state.user);
+  const variableKey = $('#climate-chart-variable').value;
+  const variable = climateVariables(records).get(variableKey) || CLIMATE_VARIABLES.temperatura;
+  const report = climateReadings(records, {
+    from: $('#climate-chart-from').value, to: $('#climate-chart-to').value,
+    finca: $('#climate-chart-farm').value, zona: $('#climate-chart-zone').value,
+    owner: isActiveAdmin() ? $('#climate-chart-owner').value : ''
+  });
+  state.climateRows = report.rows;
+  const points = report.rows.map((row, index) => ({ row, index, value: climateNumeric(row.values[variableKey]) }))
+    .filter(point => point.row.timestamp !== null && point.value !== null);
+  const notes = [];
+  if (report.invalidDateRange) notes.push('La fecha inicial debe ser válida y anterior o igual a la fecha final.');
+  else if (!report.rows.length) notes.push('No hay mediciones que coincidan con los filtros.');
+  if (report.rows.length > points.length) notes.push((report.rows.length - points.length) + ' medición(es) sin fecha, hora o valor válido no se grafican; consulta la lista.');
+  if (report.missingDateExcluded) notes.push(report.missingDateExcluded + ' captura(s) sin fecha válida se excluyeron del rango.');
+  if (report.missingReadings) notes.push(report.missingReadings + ' captura(s) no contienen lecturas.');
+  $('#climate-chart-status').textContent = [state.climateSource, ...notes].filter(Boolean).join(' ');
+  $('#climate-chart-count').textContent = report.invalidDateRange ? 'Rango no válido' : report.rows.length + (report.rows.length === 1 ? ' medición' : ' mediciones');
+  const plot = $('#climate-chart-plot');
+  if (!points.length) plot.innerHTML = '<p class="field-hint">No hay puntos válidos para esta variable.</p>';
+  else {
+    const minTime = points[0].row.timestamp;
+    const maxTime = points[points.length - 1].row.timestamp;
+    const min = points.reduce((value, point) => Math.min(value, point.value), Infinity);
+    const max = points.reduce((value, point) => Math.max(value, point.value), -Infinity);
+    const coords = points.map(point => ({ ...point,
+      x: maxTime === minTime ? 214 : 46 + (point.row.timestamp - minTime) / (maxTime - minTime) * 336,
+      y: max === min ? 110 : 200 - (point.value / 2 - min / 2) / (max / 2 - min / 2) * 180 }));
+    const axisLabel = variable.label + (variable.unit ? ' (' + variable.unit + ')' : '');
+    const lines = coords.map(point => point.x.toFixed(2) + ',' + point.y.toFixed(2)).join(' ');
+    const markers = coords.map(point => '<g class="climate-point" data-climate-reading="' + point.index +
+      '" role="button" tabindex="0" aria-label="' + esc(climateReadingLabel(point.row) + ' · ' + axisLabel + ': ' + point.value) +
+      '"><circle cx="' + point.x + '" cy="' + point.y + '" r="12" class="climate-point-hit"></circle><circle cx="' +
+      point.x + '" cy="' + point.y + '" r="4" class="climate-point-dot"></circle></g>').join('');
+    plot.innerHTML = '<div class="climate-axis-title">' + esc(axisLabel) + '</div><svg viewBox="0 0 400 245" role="group" aria-label="Gráfica de ' + esc(axisLabel) +
+      ' por fecha y hora"><line x1="46" y1="20" x2="46" y2="200" class="climate-axis"></line><line x1="46" y1="200" x2="382" y2="200" class="climate-axis"></line>' +
+      '<text x="42" y="24" text-anchor="end">' + esc(String(max)) + '</text><text x="42" y="200" text-anchor="end">' + esc(String(min)) +
+      '</text><polyline points="' + lines + '" class="climate-line"></polyline>' + markers +
+      '<text x="46" y="219" text-anchor="start">' + esc(points[0].row.date + ' ' + points[0].row.time) + '</text>' +
+      (maxTime === minTime ? '' : '<text x="382" y="235" text-anchor="end">' + esc(points[points.length - 1].row.date + ' ' + points[points.length - 1].row.time) + '</text>') +
+      '</svg><p class="field-hint">Fecha y hora de cada medición. Si hay puntos superpuestos, selecciona cada lectura en la lista.</p>';
+  }
+  $('#climate-chart-list').innerHTML = report.rows.map((row, index) => {
+    const value = climateNumeric(row.values[variableKey]);
+    return '<button type="button" class="climate-reading" data-climate-reading="' + index + '" aria-pressed="' +
+      String(row.key === state.climateSelected) + '">' + esc(climateReadingLabel(row)) + ' · ' +
+      esc(value === null ? 'Sin valor para ' + variable.label : String(value) + (variable.unit ? ' ' + variable.unit : '')) + '</button>';
+  }).join('') || '<p class="field-hint">No hay lecturas para mostrar.</p>';
+  renderClimateDetails(report.rows.find(row => row.key === state.climateSelected));
+  return report.rows;
+}
+async function loadClimateChart() {
+  if (!state.user || state.user.status !== 'active') return;
+  const user = { ...state.user };
+  const sequence = ++state.climateLoadSeq;
+  const button = $('#climate-chart-refresh');
+  button.disabled = true;
+  $('#climate-chart-status').textContent = 'Cargando mediciones…';
+  try {
+    const local = (await getRecords()).filter(recordHasLotAccess);
+    const offline = !navigator.onLine || !state.configured;
+    const remote = [];
+    if (!offline) {
+      const ownerFilter = user.role === 'admin' ? '' : '&owner_id=eq.' + encodeURIComponent(user.id);
+      for (let offset = 0, page; ; offset += 1000) {
+        page = await cloudRequest('field_records?tipo=eq.clima' + ownerFilter +
+          '&select=id,owner_id,tipo,created_at,schema_version,datos,review_status,reviewed_by,reviewed_at,review_note,profiles!field_records_owner_id_fkey(username,display_name)&order=created_at.desc,id.asc&limit=1000&offset=' + offset);
+        remote.push(...page.map(mapCloudRecord));
+        if (page.length < 1000) break;
+      }
+    }
+    if (sequence !== state.climateLoadSeq || !state.user || state.user.id !== user.id || state.user.role !== user.role) return;
+    state.climateRecords = mergeScopedReportRecords(remote, local, user, offline, 'clima');
+    state.climateSource = offline ? 'Sin conexión: se muestran solo las capturas disponibles en este dispositivo.' :
+      'Se muestran las capturas sincronizadas y las pendientes de este dispositivo.';
+    updateClimateOptions();
+    renderClimateChart();
+  } catch (error) {
+    if (sequence !== state.climateLoadSeq) return;
+    state.climateRecords = [];
+    state.climateSource = '';
+    updateClimateOptions();
+    renderClimateChart();
+    $('#climate-chart-count').textContent = 'Datos no disponibles';
+    $('#climate-chart-plot').innerHTML = '';
+    $('#climate-chart-details').innerHTML = '';
+    $('#climate-chart-list').innerHTML = '';
+    $('#climate-chart-status').textContent = 'No se pudieron cargar las mediciones. Comprueba la conexión y pulsa Actualizar datos.';
+    console.error('No se pudieron cargar las mediciones de clima.', error);
+  } finally {
+    if (sequence === state.climateLoadSeq) button.disabled = false;
+  }
+}
+function mergeScopedReportRecords(remote, local, user, offline, type = 'vuelos') {
+  const scoped = records => !user || user.status !== 'active' ? [] : records.filter(record =>
+    record && record.tipo === type && record.syncStatus !== 'delete-pending' &&
+    (user.role === 'admin' || flightRecordBelongsToUser(record, user)));
+  const cached = scoped(local);
   if (offline) return cached;
-  const rows = new Map(flightVariationScopedRecords(remote, user).map(record => [record.id, record]));
+  const rows = new Map(scoped(remote).map(record => [record.id, record]));
   const ownerIds = new Map(remote.filter(record => record.ownerUsername && record.ownerId)
     .map(record => [record.ownerUsername, record.ownerId]));
   if (user.username && user.id) ownerIds.set(user.username, user.id);
   for (const record of local) {
-    if (!record || record.tipo !== 'vuelos' ||
+    if (!record || record.tipo !== type ||
         (user.role !== 'admin' && !flightRecordBelongsToUser(record, user))) continue;
     if (record.syncStatus === 'delete-pending') rows.delete(record.id);
     else if (record.syncStatus === 'pending') {
@@ -2596,7 +2840,7 @@ async function loadFlightVariation() {
       }
     }
     if (sequence !== state.flightVariationLoadSeq || !state.user || state.user.id !== user.id || state.user.role !== user.role) return;
-    state.flightVariationRecords = mergeFlightVariationRecords(remote, local, user, offline);
+    state.flightVariationRecords = mergeScopedReportRecords(remote, local, user, offline);
     state.flightVariationSource = offline
       ? 'Sin conexión al espacio compartido: se muestran solo los vuelos disponibles en este dispositivo.'
       : 'Se muestran los vuelos sincronizados y las capturas pendientes de este dispositivo.';
@@ -3633,7 +3877,7 @@ function recordRow(record, management) {
   const module = modules[record.tipo] || { icon: '•' };
   const site = record.datos.finca || record.datos.lote || record.datos.id_lote || 'Sin finca/lote';
   const detail = [site, record.ownerName, formatDate(record.datos.fecha || record.datos.FECHA)].filter(Boolean).join(' · ');
-  const reviewer = state.user && ['admin', 'supervisor'].includes(state.user.role);
+  const reviewer = isActiveAdmin();
   const status = recordStatus(record);
   const actions = reviewer && record.ownerId && record.ownerId !== state.user.id && record.reviewStatus === 'pending'
     ? '<span class="record-review-actions"><button type="button" data-review="approved" data-record-id="' + esc(record.id) + '">Aprobar</button><button type="button" data-review="rejected" data-record-id="' + esc(record.id) + '">Rechazar</button></span>'
@@ -4155,7 +4399,7 @@ function renderLotFollowup() {
       '<td>' + esc(nextVisit) + '</td>' +
       '<td><span class="lot-followup-status-pill is-' + esc(summary.statusKey) + '">' + esc(summary.statusLabel) + '</span>' +
       (summary.pendingCount ? '<small class="followup-pending-note">' + summary.pendingCount + ' pendiente(s)</small>' : '') + '</td>' +
-      '<td><div class="lot-followup-actions"><button class="record-view-button" type="button" data-lot-followup-edit="' + esc(lotCode) + '">Editar</button></div></td>' +
+      '<td>' + (isActiveAdmin() ? '<div class="lot-followup-actions"><button class="record-view-button" type="button" data-lot-followup-edit="' + esc(lotCode) + '">Editar</button></div>' : 'Solo lectura') + '</td>' +
       '</tr>';
   });
   $('#lot-followup-rows').innerHTML = rows.length
@@ -4637,7 +4881,7 @@ async function deleteLotWeeklyProgram(programId) {
   toast('Programa semanal eliminado.');
 }
 function editLotFollowup(lotCode) {
-  if (!canAccessLotFollowup()) return;
+  if (!isActiveAdmin()) return;
   const plan = state.lotFollowupPlans.find(item => item.lot_code === lotCode);
   if (!plan) {
     setLotFollowupStatus('No se encontró el plan que intentas editar. Actualiza la lista e inténtalo de nuevo.', 'warning');
@@ -4661,7 +4905,7 @@ function editLotFollowup(lotCode) {
 }
 async function saveLotFollowup(event) {
   event.preventDefault();
-  if (!canAccessLotFollowup()) throw new Error('Solo una cuenta administradora o supervisora activa puede gestionar este módulo.');
+  if (!isActiveAdmin()) throw new Error('Solo una cuenta administradora activa puede guardar planes de seguimiento.');
   if (!state.configured || !navigator.onLine) throw new Error('Conéctate a internet para guardar cambios en el espacio compartido.');
   const form = $('#lot-followup-form');
   if (!form.reportValidity()) return;
@@ -4723,7 +4967,7 @@ async function saveLotFollowup(event) {
   toast(editingLot ? 'Plan actualizado.' : 'Plan guardado.');
 }
 async function importLotFollowupWorkbook(file) {
-  if (!canAccessLotFollowup()) throw new Error('Solo una cuenta administradora o supervisora activa puede importar planes.');
+  if (!isActiveAdmin()) throw new Error('Solo una cuenta administradora activa puede importar planes.');
   if (!state.configured || !navigator.onLine) throw new Error('Conéctate a internet para importar planes a Supabase.');
   setLotFollowupStatus('Leyendo y validando el archivo Excel…', 'info');
   const rows = await parseXlsxWorkbook(file);
@@ -4787,6 +5031,7 @@ function renderHome() {
   $('#active-role').textContent = roleName(state.user.role);
   $('#open-visit-map').hidden = !['admin', 'supervisor'].includes(state.user.role);
   $$('.admin-nav').forEach(group => { group.hidden = !isActiveAdmin(); });
+  $$('[data-admin-only]').forEach(element => { element.hidden = !isActiveAdmin(); });
   $$('.reviewer-nav').forEach(group => { group.hidden = !canAccessLotFollowup(); });
   $('#invite-user-form').hidden = !isActiveAdmin();
   $('#create-user-form').hidden = !isActiveAdmin();
@@ -4798,7 +5043,7 @@ function renderHome() {
   $('#lot-weekly-schedule-filter-responsible').value = '';
   populateInviteRoles();
   populateCreateUserRoles();
-  $('#home-subtitle').textContent = state.user.role === 'aereo' ? 'Captura vuelos y datos de apoyo para aplicaciones aéreas.' : state.user.role === 'terrestre' ? 'Captura calibraciones y labores de aplicación terrestre.' : state.user.role === 'supervisor' ? 'Revisa capturas y los apartados de Malezas y Calidad.' : 'Administra perfiles y revisa las capturas aéreas y terrestres.';
+  $('#home-subtitle').textContent = state.user.role === 'aereo' ? 'Captura vuelos y datos de apoyo para aplicaciones aéreas.' : state.user.role === 'terrestre' ? 'Captura calibraciones y labores de aplicación terrestre.' : state.user.role === 'supervisor' ? 'Consulta tus capturas y los apartados de Malezas y Calidad.' : 'Administra perfiles y revisa las capturas aéreas y terrestres.';
   refreshLists();
 }
 function workspaceMenuKey() {
@@ -4833,7 +5078,7 @@ function restoreWorkspaceMenu() {
     } else group.open = true;
   });
   const page = WORKSPACE_PAGES.includes(saved.page) ? saved.page : 'inicio';
-  if (page === 'usuarios' && !isActiveAdmin()) return 'inicio';
+  if (['usuarios', 'exportar-excel'].includes(page) && !isActiveAdmin()) return 'inicio';
   if (['seguimiento-lotes', 'programacion-semanal'].includes(page) && !canAccessLotFollowup()) return 'inicio';
   return page;
 }
@@ -4847,7 +5092,7 @@ function setMobileMenu(open) {
 function navigate(page) {
   if (!state.user) return;
   if (!WORKSPACE_PAGES.includes(page)) return;
-  if (page === 'usuarios' && !isActiveAdmin()) { toast('Solo una cuenta administradora activa puede gestionar usuarios.'); return; }
+  if (['usuarios', 'exportar-excel'].includes(page) && !isActiveAdmin()) { toast('Solo una cuenta administradora activa puede abrir esta pantalla.'); return; }
   if ((page === 'seguimiento-lotes' || page === 'programacion-semanal') && !canAccessLotFollowup()) { toast('Solo una cuenta administradora o supervisora activa puede consultar el seguimiento de lotes.'); return; }
   if (!state.editingRecord && WORK_CONTEXT_MODULES.includes(state.currentModule) &&
       !saveWorkContextDraft(state.currentModule, false)) {
@@ -4892,7 +5137,9 @@ function navigate(page) {
   }
   if (page === 'pendientes' || page === 'registros' || page === 'gestionar' || page === 'inicio') refreshLists();
   if (page === 'usuarios') refreshUsers().catch(handleCloudError);
+  if (page === 'exportar-excel') renderExcelModules();
   if (page === 'variacion-vuelo') void loadFlightVariation();
+  if (page === 'clima-grafica') void loadClimateChart();
   if (page === 'seguimiento-lotes' || page === 'programacion-semanal') {
     loadLotFollowup().catch(error => console.error('No se pudo actualizar el seguimiento de lotes.', error));
   }
@@ -4912,6 +5159,84 @@ function downloadJson(records, name) {
   anchor.click();
   URL.revokeObjectURL(url);
 }
+let excelExportSequence = 0;
+function resetExcelExport() {
+  excelExportSequence++;
+  $('#excel-export-form').reset();
+  $('#excel-export-modules').innerHTML = '';
+  $('#excel-export-status').textContent = '';
+  $('#excel-export-submit').disabled = false;
+}
+function renderExcelModules() {
+  const container = $('#excel-export-modules');
+  if (container.children.length) return;
+  container.innerHTML = Object.entries(modules).map(([key, module]) =>
+    '<label><input type="checkbox" name="module" value="' + esc(key) + '" checked><span>' + esc(module.title) + '</span></label>').join('');
+}
+async function downloadAdminExcel(event) {
+  event.preventDefault();
+  if (!isActiveAdmin()) { toast('Solo una cuenta administradora activa puede exportar capturas.'); return; }
+  const userId = state.user.id;
+  const sequence = ++excelExportSequence;
+  const button = $('#excel-export-submit');
+  const status = $('#excel-export-status');
+  const selected = $$('input[name="module"]:checked', $('#excel-export-modules')).map(input => input.value);
+  const filters = {
+    from: $('#excel-from').value, to: $('#excel-to').value,
+    farm: $('#excel-farm').value.trim(), zone: $('#excel-zone').value.trim(),
+    labor: $('#excel-labor').value.trim(), owner: $('#excel-owner').value.trim()
+  };
+  if (!selected.length || selected.some(key => !Object.hasOwn(modules, key))) {
+    status.textContent = 'Selecciona al menos un módulo válido.';
+    return;
+  }
+  if ((filters.from && !ExcelExport.dateValue(filters.from)) || (filters.to && !ExcelExport.dateValue(filters.to)) ||
+      (filters.from && filters.to && filters.from > filters.to)) {
+    status.textContent = 'El rango de fechas no es válido.';
+    return;
+  }
+  button.disabled = true;
+  status.textContent = 'Consultando las capturas sincronizadas…';
+  try {
+    if (!navigator.onLine || !state.configured) throw new Error('Conéctate al espacio compartido para descargar las capturas.');
+    const records = [];
+    let afterCreated = null, afterId = null;
+    for (;;) {
+      const page = await cloudRequest('rpc/admin_export_field_records', {
+        method: 'POST',
+        body: { p_modules: selected, p_after_created: afterCreated, p_after_id: afterId, p_limit: 250 }
+      });
+      if (sequence !== excelExportSequence || !isActiveAdmin() || state.user.id !== userId) return;
+      if (!Array.isArray(page) || page.length > 250) throw new Error('La base de datos devolvió una respuesta de exportación no válida.');
+      records.push(...page);
+      if (page.length < 250) break;
+      const last = page[page.length - 1];
+      if (!last.created_at || !last.id || (last.created_at === afterCreated && last.id === afterId)) {
+        throw new Error('No se pudo continuar la consulta de exportación.');
+      }
+      afterCreated = last.created_at;
+      afterId = last.id;
+    }
+    status.textContent = 'Preparando el archivo Excel…';
+    const result = await ExcelExport.createWorkbook(records, selected, filters, modules, { childSchemas, qualityForms }, window.ExcelJS);
+    if (sequence !== excelExportSequence || !isActiveAdmin() || state.user.id !== userId) return;
+    const blob = new Blob([result.buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob), anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = 'mym-campo-capturas-' + localDate() + '.xlsx';
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    status.textContent = result.totalRows
+      ? 'Archivo listo: se inició la descarga de ' + result.totalRows + ' fila(s).'
+      : 'Archivo listo: no hay capturas que coincidan con los filtros.';
+  } catch (error) {
+    if (sequence !== excelExportSequence) return;
+    console.error('No se pudo exportar Excel.', error);
+    status.textContent = 'No se pudo descargar Excel: ' + (error.message || 'error inesperado') + '.';
+  } finally {
+    if (sequence === excelExportSequence) button.disabled = false;
+  }
+}
 function handleCloudError(error) {
   state.syncConnected = false;
   updateConnection();
@@ -4920,6 +5245,8 @@ function handleCloudError(error) {
 }
 async function startSession(user, session) {
   resetFlightVariation();
+  resetClimateChart();
+  resetExcelExport();
   state.authSession = session;
   state.visitMap = null;
   clearLotFollowupData();
@@ -4969,6 +5296,8 @@ async function endSession() {
   state.visitMap = null;
   state.flightReportRecords = [];
   resetFlightVariation();
+  resetClimateChart();
+  resetExcelExport();
   clearLotFollowupData();
   const mapDialog = $('#visit-map-dialog');
   if (mapDialog.open) mapDialog.close();
@@ -5517,7 +5846,7 @@ async function saveMemberRole(userId) {
   await refreshUsers();
 }
 async function reviewRecord(recordId, decision) {
-  if (!['approved', 'rejected'].includes(decision) || !['admin', 'supervisor'].includes(state.user.role)) return;
+  if (!['approved', 'rejected'].includes(decision) || !isActiveAdmin()) return;
   await cloudRequest('rpc/review_field_record', {
     method: 'POST',
     body: { p_record_id: recordId, p_decision: decision, p_note: null }
@@ -5560,13 +5889,26 @@ $('#visit-map-stage').addEventListener('keydown', event => {
 function visibleLocalRecords(records) {
   const scoped = records.filter(record => record.syncStatus !== 'delete-pending' && recordHasLotAccess(record));
   if (isActiveAdmin()) return scoped;
-  if (state.user.role === 'supervisor') {
-    return scoped.filter(record => record.tipo !== 'vuelos' || flightRecordBelongsToUser(record, state.user));
-  }
-  return scoped.filter(record => record.tipo === 'vuelos'
-    ? flightRecordBelongsToUser(record, state.user)
-    : record.ownerUsername === state.user.username);
+  return scoped.filter(record => flightRecordBelongsToUser(record, state.user));
 }
+$('#climate-chart-filters').addEventListener('change', renderClimateChart);
+$('#excel-export-form').addEventListener('submit', event => { void downloadAdminExcel(event); });
+$('#climate-chart-refresh').addEventListener('click', () => { void loadClimateChart(); });
+function selectClimateReading(event) {
+  const target = event.target.closest('[data-climate-reading]');
+  if (!target || (event.type === 'keydown' && !['Enter', ' '].includes(event.key))) return;
+  if (event.type === 'keydown') event.preventDefault();
+  const row = (state.climateRows || [])[Number(target.dataset.climateReading)];
+  if (!row) return;
+  state.climateSelected = row.key;
+  renderClimateDetails(row);
+  $$('[data-climate-reading]', $('#climate-chart-list')).forEach(button => {
+    button.setAttribute('aria-pressed', String(Number(button.dataset.climateReading) === Number(target.dataset.climateReading)));
+  });
+}
+$('#climate-chart-plot').addEventListener('click', selectClimateReading);
+$('#climate-chart-plot').addEventListener('keydown', selectClimateReading);
+$('#climate-chart-list').addEventListener('click', selectClimateReading);
 $('#flight-variation-filters').addEventListener('change', renderFlightVariation);
 $('#flight-variation-refresh').addEventListener('click', () => { void loadFlightVariation(); });
 $('#flight-variation-chart').addEventListener('click', event => {

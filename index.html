@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#174b38">
   <meta name="description" content="Captura de labores aéreas y terrestres para MyM Data">
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="app.css?v=24">
+  <link rel="stylesheet" href="app.css?v=25">
   <title>MyM Campo</title>
 </head>
 <body>
@@ -89,7 +89,9 @@
     <div id="offline-banner" class="offline-banner" hidden>Sin conexión. Los registros nuevos se guardarán en este dispositivo.</div>
 
     <div class="layout">
+      <div id="mobile-menu-backdrop" class="mobile-menu-backdrop" hidden aria-hidden="true"></div>
       <aside id="workspace-menu" class="sidebar" aria-label="Navegación principal">
+        <div class="mobile-menu-heading"><strong>Menú de trabajo</strong><button id="mobile-menu-close" type="button" aria-label="Cerrar menú">✕</button></div>
         <p class="nav-caption">ESPACIO DE TRABAJO</p>
         <details class="nav-group" data-menu-group="campo" open>
           <summary>Trabajo de campo</summary>
@@ -372,10 +374,10 @@
         <form method="dialog" class="dialog-actions"><button class="secondary-button" type="submit">Cerrar</button></form>
       </div>
     </dialog>
-    <nav class="mobile-nav" aria-label="Navegación móvil"><button data-page="inicio" class="active"><span>⌂</span>Inicio</button><button data-page="capturar"><span>＋</span>Capturar</button><button data-page="pendientes"><span>◷</span>Pendientes</button><button data-page="registros"><span>▤</span>Registros</button><button id="mobile-menu-toggle" type="button" aria-controls="workspace-menu" aria-expanded="false"><span>☰</span>Menú</button></nav>
+    <nav class="mobile-nav" aria-label="Navegación móvil"><button data-page="inicio" class="active"><span aria-hidden="true">⌂</span>Inicio</button><button data-page="capturar"><span aria-hidden="true">＋</span>Capturar</button><button data-page="pendientes"><span aria-hidden="true">◷</span>Pendientes</button><button data-page="registros"><span aria-hidden="true">▤</span>Registros</button><button id="mobile-menu-toggle" type="button" aria-controls="workspace-menu" aria-expanded="false"><span aria-hidden="true">☰</span>Menú</button></nav>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </div>
   <script src="config.js"></script>
-  <script src="app.js?v=53"></script>
+  <script src="app.js?v=54"></script>
 </body>
 </html>

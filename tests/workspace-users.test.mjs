@@ -160,3 +160,81 @@ test('restores menu state per account and rejects pages outside the current role
   storage.set('menu:b', '{"page":"[invalid","groups":{}}');
   assert.equal(menu.restoreWorkspaceMenu(), 'inicio');
 });
+
+test('opens and closes the mobile menu with synchronized accessibility state', () => {
+  const code = extract('function setMobileMenu(open)', '\nfunction navigate(page)');
+  const classes = () => ({
+    values: new Set(),
+    toggle(name, enabled) { if (enabled) this.values.add(name); else this.values.delete(name); },
+    contains(name) { return this.values.has(name); }
+  });
+  let focused = false;
+  const controls = {
+    '#workspace-menu': { classList: classes() },
+    '#mobile-menu-toggle': { setAttribute(name, value) { this[name] = value; } },
+    '#mobile-menu-backdrop': { hidden: true },
+    '#mobile-menu-close': { focus() { focused = true; } }
+  };
+  const body = { classList: classes() };
+  const { setMobileMenu } = runInNewContext(code + '\n({ setMobileMenu })', {
+    $: selector => controls[selector], document: { body }
+  });
+  setMobileMenu(true);
+  assert.equal(controls['#workspace-menu'].classList.contains('mobile-open'), true);
+  assert.equal(controls['#mobile-menu-toggle']['aria-expanded'], 'true');
+  assert.equal(controls['#mobile-menu-backdrop'].hidden, false);
+  assert.equal(body.classList.contains('mobile-menu-open'), true);
+  assert.equal(focused, true);
+  setMobileMenu(false);
+  assert.equal(controls['#workspace-menu'].classList.contains('mobile-open'), false);
+  assert.equal(controls['#mobile-menu-toggle']['aria-expanded'], 'false');
+  assert.equal(controls['#mobile-menu-backdrop'].hidden, true);
+  assert.equal(body.classList.contains('mobile-menu-open'), false);
+});
+
+test('menu controls close the drawer on outside tap, Escape, and desktop resize', () => {
+  const menuCode = extract('function setMobileMenu(open)', '\nfunction navigate(page)');
+  const handlers = extract(
+    "$$('[data-menu-group]').forEach(group => group.addEventListener('toggle'",
+    "  if (event.target.closest('#users-retry'))"
+  );
+  const classes = () => ({
+    values: new Set(),
+    toggle(name, enabled) { if (enabled) this.values.add(name); else this.values.delete(name); },
+    contains(name) { return this.values.has(name); }
+  });
+  let focused = '';
+  let groupToggle;
+  const documentHandlers = {};
+  const windowHandlers = {};
+  const controls = {
+    '#workspace-menu': { classList: classes() },
+    '#mobile-menu-toggle': { setAttribute() {}, focus() { focused = 'toggle'; } },
+    '#mobile-menu-backdrop': { hidden: true },
+    '#mobile-menu-close': { focus() { focused = 'close'; } }
+  };
+  const document = { body: { classList: classes() }, addEventListener: (type, fn) => { documentHandlers[type] = fn; } };
+  const window = { innerWidth: 320, addEventListener: (type, fn) => { windowHandlers[type] = fn; } };
+  let saves = 0;
+  runInNewContext(menuCode + '\n' + handlers + '\n});', {
+    document, window, $: selector => controls[selector],
+    $$: () => [{ addEventListener(type, fn) { if (type === 'toggle') groupToggle = fn; } }],
+    saveWorkspaceMenu() { saves++; }
+  });
+  const click = selector => documentHandlers.click({ target: { closest: query => query.split(', ').includes(selector) } });
+  click('#mobile-menu-toggle');
+  assert.equal(controls['#mobile-menu-backdrop'].hidden, false);
+  assert.equal(focused, 'close');
+  click('#mobile-menu-backdrop');
+  assert.equal(controls['#mobile-menu-backdrop'].hidden, true);
+  assert.equal(focused, 'toggle');
+  click('#mobile-menu-toggle');
+  documentHandlers.keydown({ key: 'Escape' });
+  assert.equal(controls['#mobile-menu-backdrop'].hidden, true);
+  click('#mobile-menu-toggle');
+  window.innerWidth = 761;
+  windowHandlers.resize();
+  assert.equal(controls['#mobile-menu-backdrop'].hidden, true);
+  groupToggle();
+  assert.equal(saves, 1);
+});

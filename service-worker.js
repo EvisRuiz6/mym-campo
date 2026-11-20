@@ -1,5 +1,5 @@
-const CACHE = 'mym-campo-shell-v57';
-const SHELL = ['./', './index.html', './config.js', './app.css?v=23', './app.js?v=52', './manifest.json', './icon.svg'];
+const CACHE = 'mym-campo-shell-v58';
+const SHELL = ['./', './index.html', './config.js', './app.css?v=24', './app.js?v=53', './manifest.json', './icon.svg'];
 self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting())));
 self.addEventListener('activate', event => event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key)))).then(() => self.clients.claim())));
 self.addEventListener('fetch', event => {

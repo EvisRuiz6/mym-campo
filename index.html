@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#174b38">
   <meta name="description" content="Captura de labores aéreas y terrestres para MyM Data">
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="app.css?v=23">
+  <link rel="stylesheet" href="app.css?v=24">
   <title>MyM Campo</title>
 </head>
 <body>
@@ -75,7 +75,7 @@
 
   <div id="app-shell" class="app-shell" hidden>
     <header class="topbar">
-      <a class="brand" href="#inicio" aria-label="MyM Campo, inicio">
+      <a class="brand" href="#inicio" data-goto="inicio" aria-label="MyM Campo, inicio">
         <span class="brand-mark" aria-hidden="true">M</span>
         <span><strong>MyM Campo</strong><small>Control de malezas y madurantes</small></span>
       </a>
@@ -89,16 +89,28 @@
     <div id="offline-banner" class="offline-banner" hidden>Sin conexión. Los registros nuevos se guardarán en este dispositivo.</div>
 
     <div class="layout">
-      <aside class="sidebar" aria-label="Navegación principal">
+      <aside id="workspace-menu" class="sidebar" aria-label="Navegación principal">
         <p class="nav-caption">ESPACIO DE TRABAJO</p>
-        <button class="nav-item active" data-page="inicio"><span class="nav-icon">⌂</span> Inicio</button>
-        <button class="nav-item" data-page="capturar"><span class="nav-icon">＋</span> Capturar datos</button>
-        <button class="nav-item" data-page="pendientes"><span class="nav-icon">◷</span> Pendientes <b id="pending-badge" class="nav-count">0</b></button>
-        <button class="nav-item" data-page="registros"><span class="nav-icon">▤</span> Registros del dispositivo</button>
-        <button class="nav-item" data-page="gestionar"><span class="nav-icon">✎</span> Administrar capturas</button>
-        <button class="nav-item reviewer-nav" data-page="seguimiento-lotes" hidden><span class="nav-icon">◷</span> Seguimiento de lotes</button>
-        <button class="nav-item reviewer-nav" data-page="programacion-semanal" hidden><span class="nav-icon">◷</span> Visitas semanales</button>
-        <button class="nav-item admin-nav" data-page="usuarios" hidden><span class="nav-icon">♙</span> Usuarios</button>
+        <details class="nav-group" data-menu-group="campo" open>
+          <summary>Trabajo de campo</summary>
+          <button class="nav-item active" data-page="inicio"><span class="nav-icon">⌂</span> Inicio</button>
+          <button class="nav-item" data-page="capturar"><span class="nav-icon">＋</span> Capturar datos</button>
+          <button class="nav-item" data-page="pendientes"><span class="nav-icon">◷</span> Pendientes <b id="pending-badge" class="nav-count">0</b></button>
+        </details>
+        <details class="nav-group" data-menu-group="registros" open>
+          <summary>Registros</summary>
+          <button class="nav-item" data-page="registros"><span class="nav-icon">▤</span> Registros</button>
+          <button class="nav-item" data-page="gestionar"><span class="nav-icon">✎</span> Administrar capturas</button>
+        </details>
+        <details class="nav-group reviewer-nav" data-menu-group="seguimiento" open hidden>
+          <summary>Seguimiento</summary>
+          <button class="nav-item" data-page="seguimiento-lotes"><span class="nav-icon">◷</span> Seguimiento de lotes</button>
+          <button class="nav-item" data-page="programacion-semanal"><span class="nav-icon">◷</span> Visitas semanales</button>
+        </details>
+        <details class="nav-group admin-nav" data-menu-group="administracion" open hidden>
+          <summary>Administración</summary>
+          <button class="nav-item" data-page="usuarios"><span class="nav-icon">♙</span> Usuarios</button>
+        </details>
         <div class="side-note"><span class="sync-dot"></span><div><strong>Captura y sincronización</strong><small>Las capturas sin conexión quedan en cola y se envían al recuperar conexión.</small></div></div>
       </aside>
 
@@ -237,6 +249,10 @@
 
         <section id="page-usuarios" class="page" hidden>
           <p class="eyebrow">ADMINISTRACIÓN DE ACCESO</p><h1>Usuarios y perfiles</h1><p class="subtitle">Revisa las solicitudes y asigna el perfil permitido para cada cuenta del espacio compartido.</p>
+          <div id="users-load-status" class="status-strip warning-strip users-load-status" role="status" aria-live="polite" hidden>
+            <span class="status-check">!</span><div id="users-load-status-text"></div>
+            <button id="users-retry" class="secondary-button" type="button">Reintentar</button>
+          </div>
           <form id="create-user-form" class="form-section invite-user-form" hidden>
             <h2>Crear usuario sin correo</h2>
             <p class="field-hint">Define una contraseña inicial y entrégala a la persona de forma privada. La persona iniciará sesión con su usuario.</p>
@@ -356,10 +372,10 @@
         <form method="dialog" class="dialog-actions"><button class="secondary-button" type="submit">Cerrar</button></form>
       </div>
     </dialog>
-    <nav class="mobile-nav" aria-label="Navegación móvil"><button data-page="inicio" class="active"><span>⌂</span>Inicio</button><button data-page="capturar"><span>＋</span>Capturar</button><button data-page="pendientes"><span>◷</span>Pendientes</button><button data-page="registros"><span>▤</span>Registros</button><button class="reviewer-nav" data-page="seguimiento-lotes" aria-label="Seguimiento de lotes" hidden><span>◷</span>Lotes</button><button class="reviewer-nav" data-page="programacion-semanal" aria-label="Visitas semanales" hidden><span>◷</span>Semanal</button><button class="admin-mobile-nav" data-page="usuarios" hidden><span>♙</span>Usuarios</button></nav>
+    <nav class="mobile-nav" aria-label="Navegación móvil"><button data-page="inicio" class="active"><span>⌂</span>Inicio</button><button data-page="capturar"><span>＋</span>Capturar</button><button data-page="pendientes"><span>◷</span>Pendientes</button><button data-page="registros"><span>▤</span>Registros</button><button id="mobile-menu-toggle" type="button" aria-controls="workspace-menu" aria-expanded="false"><span>☰</span>Menú</button></nav>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </div>
   <script src="config.js"></script>
-  <script src="app.js?v=52"></script>
+  <script src="app.js?v=53"></script>
 </body>
 </html>

@@ -4,6 +4,8 @@ const SESSION_KEY = 'mym-campo-auth-session';
 const PROFILE_KEY = 'mym-campo-auth-profile';
 const INVITE_PENDING_KEY = 'mym-campo-invite-pending';
 const LOT_LOOKUP_CACHE_KEY = 'mym-campo-lot-lookup:';
+const WORKSPACE_MENU_KEY = 'mym-campo-workspace-menu:';
+const WORKSPACE_PAGES = ['inicio', 'capturar', 'pendientes', 'registros', 'gestionar', 'seguimiento-lotes', 'programacion-semanal', 'usuarios'];
 const NO_EMAIL_AUTH_DOMAIN = 'users.mym-campo.invalid';
 const ROLE_OPTIONS = ['aereo', 'terrestre', 'supervisor', 'admin'];
 const modules = {
@@ -213,7 +215,7 @@ const childSchemas = {
 };
 const $ = (selector, root) => (root || document).querySelector(selector);
 const $$ = (selector, root) => [...(root || document).querySelectorAll(selector)];
-const state = { db: null, user: null, authSession: null, configured: false, syncConnected: false, syncBusy: false, syncIdleWaiters: [], syncRequested: false, flightActivityLaborBusy: false, flightActivityLaborQueue: Promise.resolve(), flightActivityLaborUpdatePromise: null, refreshPromise: null, currentModule: null, editingRecord: null, recordTimeTimer: null, lotLookup: Object.create(null), lotLookupRequests: new Map(), zoneOptions: [], visitMap: null, flightReportRecords: [], acceptingInvite: false, lotFollowupPlans: [], lotFollowupVisits: [], lotWeeklyPrograms: [], lotFollowupLoadPromise: null, lotFollowupDateId: 0, editingLotFollowup: null, editingLotWeeklyProgramId: null, lotWeeklyProgramDraftKey: '', lotWeeklyProgramDraftLotCodes: [] };
+const state = { db: null, user: null, authSession: null, configured: false, syncConnected: false, syncBusy: false, syncIdleWaiters: [], syncRequested: false, flightActivityLaborBusy: false, flightActivityLaborQueue: Promise.resolve(), flightActivityLaborUpdatePromise: null, refreshPromise: null, currentModule: null, editingRecord: null, recordTimeTimer: null, lotLookup: Object.create(null), lotLookupRequests: new Map(), zoneOptions: [], zonesReady: false, usersLoadPromise: null, visitMap: null, flightReportRecords: [], acceptingInvite: false, lotFollowupPlans: [], lotFollowupVisits: [], lotWeeklyPrograms: [], lotFollowupLoadPromise: null, lotFollowupDateId: 0, editingLotFollowup: null, editingLotWeeklyProgramId: null, lotWeeklyProgramDraftKey: '', lotWeeklyProgramDraftLotCodes: [] };
 
 function lotLookupCacheKey() {
   const scopeKey = [state.user.role, ...(state.user.allowedZones || []).slice().sort()].join(':');
@@ -519,18 +521,31 @@ async function apiRequest(path, options) {
   const headers = { apikey: config.anonKey, ...(options.headers || {}) };
   if (options.token) headers.Authorization = 'Bearer ' + options.token;
   if (options.body !== undefined) headers['Content-Type'] = 'application/json';
-  const response = await fetch(config.url + path, {
-    method: options.method || 'GET',
-    headers,
-    body: options.body === undefined ? undefined : JSON.stringify(options.body)
-  });
+  let response;
+  try {
+    response = await fetch(config.url + path, {
+      method: options.method || 'GET',
+      headers,
+      body: options.body === undefined ? undefined : JSON.stringify(options.body)
+    });
+  } catch (error) {
+    console.error('Falló la conexión con Supabase.', error);
+    throw new Error(navigator.onLine
+      ? 'No se pudo conectar con el servicio. Verifica internet, la disponibilidad del servidor y CORS; vuelve a intentarlo.'
+      : 'Sin conexión a internet. Conéctate y vuelve a intentarlo.');
+  }
   const text = await response.text();
   let result = null;
   if (text) {
     try { result = JSON.parse(text); }
     catch { throw new Error('Supabase devolvió una respuesta no válida.'); }
   }
-  if (!response.ok) throw new Error(result && (result.msg || result.message || result.error_description || result.hint) || 'La solicitud al espacio compartido falló (' + response.status + ').');
+  if (!response.ok) {
+    if (response.status === 401 && !path.startsWith('/auth/')) throw new Error('La sesión no es válida o expiró. Vuelve a iniciar sesión.');
+    if (response.status === 403) throw new Error('La cuenta no tiene permisos para esta operación.');
+    if (response.status === 404 && path.startsWith('/functions/v1/')) throw new Error('El servicio de usuarios no está desplegado. Contacta al administrador del sistema.');
+    throw new Error(result && (result.msg || result.message || result.error_description || result.hint) || 'La solicitud al espacio compartido falló (' + response.status + ').');
+  }
   return result;
 }
 function saveAuthSession(session) {
@@ -3563,22 +3578,63 @@ function renderUsers(users, zones) {
     '<article class="user-row"><span class="user-avatar">' + esc(initials(user.display_name)) + '</span><span class="user-info"><strong>' + esc(user.display_name) + '</strong><small>' + esc((user.email || 'Sin correo') + ' · ' + user.username + ' · ' + (user.status === 'active' ? 'Activa' : user.status === 'suspended' ? 'Suspendida' : 'Pendiente')) + '</small></span><span class="member-actions"><select class="select-input" data-member-role="' + esc(user.id) + '" data-original-role="' + esc(user.role) + '" aria-label="Perfil para ' + esc(user.display_name) + '">' + ROLE_OPTIONS.map(role => '<option value="' + role + '"' + (user.role === role ? ' selected' : '') + '>' + esc(roleName(role)) + '</option>').join('') + '</select></span><details class="member-zone-picker"' + (['admin', 'aereo'].includes(user.role) ? ' hidden' : '') + '><summary>' + (['admin', 'aereo'].includes(user.role) ? 'Todas las zonas' : 'Zonas permitidas (' + (user.allowed_zones || []).length + ')') + '</summary><div class="zone-checkboxes">' + zones.map(zone => '<label><input type="checkbox" data-member-zone="' + esc(user.id) + '" value="' + esc(zone) + '"' + ((user.allowed_zones || []).some(userZone => normalizeZoneValue(userZone).toLowerCase() === normalizeZoneValue(zone).toLowerCase()) ? ' checked' : '') + '> ' + esc(zone) + '</label>').join('') + '</div></details><button class="secondary-button" type="button" data-member-save="' + esc(user.id) + '">Guardar</button></article>'
   ).join('') || emptyState('Aún no hay cuentas.');
 }
-async function refreshUsers() {
-  if (!isActiveAdmin()) return;
-  const users = await cloudRequest('profiles?select=id,email,username,display_name,role,status,allowed_zones&order=created_at.asc');
+async function fetchUserZones() {
   const zones = new Set();
   for (let offset = 0, lots; ; offset += 1000) {
     lots = await cloudRequest('field_lots?select=zone&order=lot_code.asc&limit=1000&offset=' + offset);
+    if (!Array.isArray(lots)) throw new Error('El catálogo de lotes devolvió una respuesta no válida.');
     for (const lot of lots) {
       const zone = normalizeZoneValue(lot.zone);
       if (zone) zones.add(zone);
     }
     if (lots.length < 1000) break;
   }
-  state.zoneOptions = [...zones].sort((a, b) => a.localeCompare(b, 'es'));
-  updateInviteZoneVisibility();
-  updateCreateUserZoneVisibility();
-  renderUsers(users, state.zoneOptions);
+  return [...zones].sort((a, b) => a.localeCompare(b, 'es'));
+}
+async function refreshUsers() {
+  if (!isActiveAdmin()) return;
+  if (state.usersLoadPromise) return state.usersLoadPromise;
+  const userId = state.user.id;
+  const retry = $('#users-retry');
+  state.zonesReady = false;
+  retry.disabled = true;
+  $('#users-load-status-text').textContent = 'Cargando usuarios y zonas permitidas…';
+  $('#users-load-status').hidden = false;
+  const loadPromise = (async () => {
+    const [usersResult, zonesResult] = await Promise.allSettled([
+      cloudRequest('profiles?select=id,email,username,display_name,role,status,allowed_zones&order=created_at.asc'),
+      fetchUserZones()
+    ]);
+    if (state.usersLoadPromise !== loadPromise || !state.user || state.user.id !== userId || !isActiveAdmin()) return;
+    const errors = [];
+    if (zonesResult.status === 'fulfilled') {
+      state.zoneOptions = zonesResult.value;
+      state.zonesReady = true;
+      updateInviteZoneVisibility();
+      updateCreateUserZoneVisibility();
+      if (!state.zoneOptions.length) errors.push('No hay zonas en el catálogo de lotes. Registra lotes antes de asignar zonas.');
+    } else {
+      state.zonesReady = false;
+      console.error('No se pudieron cargar las zonas permitidas.', zonesResult.reason);
+      errors.push('No se pudieron cargar las zonas permitidas. ' + (zonesResult.reason.message || 'Revisa la conexión y los permisos.'));
+    }
+    if (usersResult.status === 'fulfilled' && Array.isArray(usersResult.value)) {
+      if (zonesResult.status === 'fulfilled') renderUsers(usersResult.value, state.zoneOptions);
+    } else {
+      const error = usersResult.status === 'rejected' ? usersResult.reason : new Error('La respuesta del servidor no es válida.');
+      console.error('No se pudo cargar la lista de usuarios.', error);
+      errors.push('No se pudo cargar la lista de usuarios. ' + (error.message || 'Revisa la conexión y los permisos.'));
+    }
+    $('#users-load-status-text').textContent = errors.join(' ');
+    $('#users-load-status').hidden = !errors.length;
+  })().finally(() => {
+    if (state.usersLoadPromise === loadPromise) {
+      retry.disabled = false;
+      state.usersLoadPromise = null;
+    }
+  });
+  state.usersLoadPromise = loadPromise;
+  return loadPromise;
 }
 function populateInviteRoles() {
   const select = $('#invite-user-role');
@@ -3599,7 +3655,8 @@ function updateCreateUserZoneVisibility() {
   $('#create-user-zone-policy').textContent = unrestricted
     ? 'Este perfil tiene acceso a todas las zonas.'
     : 'Selecciona las zonas que podrá consultar y capturar.';
-  renderZoneCheckboxes($('#create-user-zones'), state.zoneOptions, [], 'name="create_allowed_zones"');
+  const selected = $$('input:checked', $('#create-user-zones')).map(input => input.value);
+  renderZoneCheckboxes($('#create-user-zones'), state.zoneOptions, selected, 'name="create_allowed_zones"');
 }
 function updateInviteZoneVisibility() {
   const zonePicker = $('#invite-user-zone-picker');
@@ -3609,7 +3666,8 @@ function updateInviteZoneVisibility() {
   $('#invite-zone-policy').textContent = unrestricted
     ? 'Este perfil tiene acceso a todas las zonas.'
     : 'Selecciona las zonas que podrá consultar y capturar.';
-  renderZoneCheckboxes($('#invite-user-zones'), state.zoneOptions, [], 'name="allowed_zones"');
+  const selected = $$('input:checked', $('#invite-user-zones')).map(input => input.value);
+  renderZoneCheckboxes($('#invite-user-zones'), state.zoneOptions, selected, 'name="allowed_zones"');
 }
 function userCanAccessLot(lotCode) {
   const lot = state.lotLookup[lotCode];
@@ -4560,9 +4618,8 @@ function renderHome() {
   $('#active-user').textContent = state.user.displayName;
   $('#active-role').textContent = roleName(state.user.role);
   $('#open-visit-map').hidden = !['admin', 'supervisor'].includes(state.user.role);
-  $('.admin-nav').hidden = !isActiveAdmin();
-  $('.admin-mobile-nav').hidden = !isActiveAdmin();
-  $$('.reviewer-nav').forEach(button => { button.hidden = !canAccessLotFollowup(); });
+  $$('.admin-nav').forEach(group => { group.hidden = !isActiveAdmin(); });
+  $$('.reviewer-nav').forEach(group => { group.hidden = !canAccessLotFollowup(); });
   $('#invite-user-form').hidden = !isActiveAdmin();
   $('#create-user-form').hidden = !isActiveAdmin();
   resetLotFollowupForm();
@@ -4576,8 +4633,49 @@ function renderHome() {
   $('#home-subtitle').textContent = state.user.role === 'aereo' ? 'Captura vuelos y datos de apoyo para aplicaciones aéreas.' : state.user.role === 'terrestre' ? 'Captura calibraciones y labores de aplicación terrestre.' : state.user.role === 'supervisor' ? 'Revisa capturas y los apartados de Malezas y Calidad.' : 'Administra perfiles y revisa las capturas aéreas y terrestres.';
   refreshLists();
 }
+function workspaceMenuKey() {
+  return WORKSPACE_MENU_KEY + state.user.id;
+}
+function readWorkspaceMenu() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(workspaceMenuKey()) || '{}');
+    return saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {};
+  } catch (error) {
+    console.warn('No se pudo leer el menú guardado.', error);
+    return {};
+  }
+}
+function saveWorkspaceMenu(page) {
+  if (!state.user) return;
+  try {
+    const saved = readWorkspaceMenu();
+    if (page) saved.page = page;
+    saved.groups = Object.fromEntries($$('[data-menu-group]').map(group => [group.dataset.menuGroup, group.open]));
+    localStorage.setItem(workspaceMenuKey(), JSON.stringify(saved));
+  } catch (error) {
+    console.warn('No se pudo guardar el menú de trabajo.', error);
+    toast('No se pudo guardar el menú en este dispositivo.');
+  }
+}
+function restoreWorkspaceMenu() {
+  const saved = readWorkspaceMenu();
+  $$('[data-menu-group]').forEach(group => {
+    if (saved.groups && typeof saved.groups[group.dataset.menuGroup] === 'boolean') {
+      group.open = saved.groups[group.dataset.menuGroup];
+    } else group.open = true;
+  });
+  const page = WORKSPACE_PAGES.includes(saved.page) ? saved.page : 'inicio';
+  if (page === 'usuarios' && !isActiveAdmin()) return 'inicio';
+  if (['seguimiento-lotes', 'programacion-semanal'].includes(page) && !canAccessLotFollowup()) return 'inicio';
+  return page;
+}
+function setMobileMenu(open) {
+  $('#workspace-menu').classList.toggle('mobile-open', open);
+  $('#mobile-menu-toggle').setAttribute('aria-expanded', String(open));
+}
 function navigate(page) {
   if (!state.user) return;
+  if (!WORKSPACE_PAGES.includes(page)) return;
   if (page === 'usuarios' && !isActiveAdmin()) { toast('Solo una cuenta administradora activa puede gestionar usuarios.'); return; }
   if ((page === 'seguimiento-lotes' || page === 'programacion-semanal') && !canAccessLotFollowup()) { toast('Solo una cuenta administradora o supervisora activa puede consultar el seguimiento de lotes.'); return; }
   if (!state.editingRecord && WORK_CONTEXT_MODULES.includes(state.currentModule) &&
@@ -4599,7 +4697,15 @@ function navigate(page) {
     const active = button.dataset.page === page ||
       (page === 'gestionar' && button.closest('.mobile-nav') && button.dataset.page === 'registros');
     button.classList.toggle('active', !!active);
+    if (active) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
   });
+  $$('.nav-group').forEach(group => {
+    group.classList.toggle('has-active-page', !!$('[data-page="' + page + '"]', group));
+  });
+  $('#mobile-menu-toggle').classList.toggle('active', !['inicio', 'capturar', 'pendientes', 'registros'].includes(page));
+  saveWorkspaceMenu(page);
+  setMobileMenu(false);
   if (page === 'capturar') {
     state.editingRecord = null;
     $('#capture-form').reset();
@@ -4656,7 +4762,7 @@ async function startSession(user, session) {
   $('#app-shell').hidden = false;
   renderHome();
   updateConnection();
-  navigate('inicio');
+  navigate(restoreWorkspaceMenu());
   if (navigator.onLine) {
     try { await syncCloudRecords(false); }
     catch (error) { handleCloudError(error); }
@@ -4679,6 +4785,14 @@ async function endSession() {
   localStorage.removeItem(PROFILE_KEY);
   state.authSession = null;
   state.user = null;
+  state.zoneOptions = [];
+  state.zonesReady = false;
+  state.usersLoadPromise = null;
+  $('#users-list').innerHTML = '';
+  $('#create-user-zones').innerHTML = '';
+  $('#invite-user-zones').innerHTML = '';
+  $('#users-load-status').hidden = true;
+  setMobileMenu(false);
   state.visitMap = null;
   state.flightReportRecords = [];
   clearLotFollowupData();
@@ -4700,6 +4814,14 @@ async function endSession() {
   showAuthScreen('login');
 }
 document.addEventListener('click', event => {
+  if (event.target.closest('#mobile-menu-toggle')) {
+    setMobileMenu(!$('#workspace-menu').classList.contains('mobile-open'));
+    return;
+  }
+  if (event.target.closest('#users-retry')) {
+    refreshUsers().catch(handleCloudError);
+    return;
+  }
   const authMode = event.target.closest('[data-auth-mode]');
   if (authMode) { showAuthScreen(authMode.dataset.authMode); return; }
   const flightReportButton = event.target.closest('[data-open-flight-report]');
@@ -4713,6 +4835,13 @@ document.addEventListener('click', event => {
     showRecordDetails(viewRecord.dataset.viewRecord).catch(error => {
       console.error(error);
       toast('No se pudo cargar la información de la captura.');
+    });
+    $$('[data-menu-group]').forEach(group => group.addEventListener('toggle', () => saveWorkspaceMenu()));
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && $('#workspace-menu').classList.contains('mobile-open')) {
+        setMobileMenu(false);
+        $('#mobile-menu-toggle').focus();
+      }
     });
     return;
   }
@@ -5022,6 +5151,10 @@ $('#create-user-form').addEventListener('submit', async event => {
     authMessage('create-user-message', 'Conéctate a internet para crear una cuenta.');
     return;
   }
+  if (!['admin', 'aereo'].includes($('#create-user-role').value) && !state.zonesReady) {
+    authMessage('create-user-message', 'Primero carga las zonas permitidas con el botón Reintentar.');
+    return;
+  }
 
   const submitButton = form.querySelector('button[type="submit"]');
   submitButton.disabled = true;
@@ -5053,6 +5186,7 @@ $('#create-user-form').addEventListener('submit', async event => {
   if (!created) return;
 
   form.reset();
+  $$('input:checked', $('#create-user-zones')).forEach(input => { input.checked = false; });
   updateCreateUserZoneVisibility();
   authMessage('create-user-message', 'Cuenta creada para ' + created.username + '. Entrégale la contraseña inicial de forma privada.');
   $('#create-user-message').classList.add('success-message');
@@ -5140,6 +5274,10 @@ $('#invite-user-form').addEventListener('submit', async event => {
     authMessage('invite-user-message', 'Conéctate a internet para enviar una invitación.');
     return;
   }
+  if (!['admin', 'aereo'].includes($('#invite-user-role').value) && !state.zonesReady) {
+    authMessage('invite-user-message', 'Primero carga las zonas permitidas con el botón Reintentar.');
+    return;
+  }
   const submitButton = form.querySelector('button[type="submit"]');
   submitButton.disabled = true;
   let invitationSent = false;
@@ -5161,6 +5299,7 @@ $('#invite-user-form').addEventListener('submit', async event => {
     });
     invitationSent = true;
     form.reset();
+    $$('input:checked', $('#invite-user-zones')).forEach(input => { input.checked = false; });
     updateInviteZoneVisibility();
     authMessage('invite-user-message', 'Invitación enviada a ' + invitation.email + '. La persona establecerá su contraseña desde el correo.');
     $('#invite-user-message').classList.add('success-message');
@@ -5182,6 +5321,9 @@ async function saveMemberRole(userId) {
   if (!isActiveAdmin()) throw new Error('Solo un administrador activo puede asignar perfiles.');
   const roleSelect = $$('[data-member-role]').find(item => item.dataset.memberRole === userId);
   if (!roleSelect) throw new Error('No se encontró el perfil seleccionado.');
+  if (!['admin', 'aereo'].includes(roleSelect.value) && !state.zonesReady) {
+    throw new Error('Primero carga las zonas permitidas con el botón Reintentar.');
+  }
   const zones = ['admin', 'aereo'].includes(roleSelect.value) ? [] :
     $$('[data-member-zone]').filter(input => input.dataset.memberZone === userId && input.checked).map(input => input.value);
   await cloudRequest('rpc/set_member_access', {

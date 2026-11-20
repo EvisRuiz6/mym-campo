@@ -36,6 +36,13 @@ button { -webkit-tap-highlight-color: transparent; }
 .nav-item.active { font-weight: 700; }
 .nav-icon { width: 19px; text-align: center; font-size: 18px; }
 .nav-count { margin-left: auto; background: #dceadd; color: var(--forest); border-radius: 12px; padding: 2px 8px; font-size: 11px; }
+.nav-group { margin-bottom: 8px; }
+.nav-group summary { min-height: 44px; padding: 12px; color: #64746a; font-size: 12px; font-weight: 700; cursor: pointer; }
+.nav-group.has-active-page > summary { color: var(--forest); }
+.nav-group .nav-item { padding-left: 18px; min-height: 44px; }
+.users-load-status { margin: 20px 0 0; flex-wrap: wrap; }
+.users-load-status div { flex: 1 1 220px; line-height: 1.5; font-size: 13px; overflow-wrap: anywhere; }
+.users-load-status button { margin-left: auto; }
 .side-note { display: flex; gap: 10px; margin-top: auto; padding: 15px 10px 0; border-top: 1px solid var(--line); }
 .side-note strong, .side-note small { display: block; }
 .side-note strong { font-size: 12px; font-weight: 600; }
@@ -289,6 +296,8 @@ dialog::backdrop { background: #17241c88; }
   .connection { font-size: 10px; }
   .layout { display: block; min-height: calc(100dvh - 64px); }
   .sidebar { display: none; }
+  .sidebar.mobile-open { display: flex; position: fixed; z-index: 6; left: 0; right: 0; top: 64px; bottom: calc(68px + env(safe-area-inset-bottom)); overflow-y: auto; padding: 18px; box-shadow: 0 12px 30px #132d1e40; }
+  .sidebar.mobile-open .side-note { margin-top: 20px; }
   .main-content { padding: 30px 18px 100px; }
   .welcome-row { align-items: flex-start; flex-direction: column; margin-bottom: 22px; }
   .welcome-row h1, h1 { font-size: 27px; }
@@ -299,7 +308,7 @@ dialog::backdrop { background: #17241c88; }
   .module-grid { grid-template-columns: 1fr; }
   .module-card { min-height: 75px; }
   .recent-heading { margin-top: 30px; }
-  .mobile-nav { position: fixed; bottom: 0; left: 0; right: 0; height: 68px; padding: 6px max(9px, env(safe-area-inset-right)) calc(5px + env(safe-area-inset-bottom)) max(9px, env(safe-area-inset-left)); background: #fff; border-top: 1px solid var(--line); display: flex; justify-content: space-around; z-index: 5; }
+  .mobile-nav { position: fixed; bottom: 0; left: 0; right: 0; height: calc(68px + env(safe-area-inset-bottom)); padding: 6px max(9px, env(safe-area-inset-right)) calc(5px + env(safe-area-inset-bottom)) max(9px, env(safe-area-inset-left)); background: #fff; border-top: 1px solid var(--line); display: flex; justify-content: space-around; z-index: 7; }
   .mobile-nav button { flex: 1; min-width: 0; padding: 0 2px; border: 0; background: transparent; color: #78867d; font-size: 9px; font-weight: 500; display: flex; flex-direction: column; align-items: center; gap: 3px; cursor: pointer; white-space: nowrap; }
   .mobile-nav button span { font-size: 19px; line-height: 24px; }
   .mobile-nav button.active { color: var(--forest); font-weight: 700; }
@@ -318,7 +327,22 @@ dialog::backdrop { background: #17241c88; }
   .lot-followup-date-row { grid-template-columns: minmax(0, 1fr) auto; }
   .lot-followup-toolbar .select-input { width: 100%; }
   .lot-followup-import-button { width: 100%; }
-  .lot-followup-table { min-width: 900px; }
+  .lot-followup-table { min-width: 0; }
+  .lot-followup-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .lot-followup-table, .lot-followup-table tbody, .lot-followup-table tr, .lot-followup-table td { display: block; width: 100%; }
+  .lot-followup-table tr { padding: 12px; border-bottom: 1px solid var(--line); }
+  .lot-followup-table td { display: flex; gap: 10px; padding: 7px 0; border: 0; font-size: 13px; }
+  .lot-followup-table td:not(:only-child)::before { flex: 0 0 110px; color: #64746a; font-size: 12px; font-weight: 700; }
+  .lot-followup-table td:nth-child(1)::before { content: 'Finca / lote'; }
+  .lot-followup-table td:nth-child(2)::before { content: 'Siembra / corte'; }
+  .lot-followup-table td:nth-child(3)::before { content: 'Estado'; }
+  .lot-followup-table td:nth-child(4)::before { content: 'Responsable'; }
+  .lot-followup-table td:nth-child(5)::before { content: 'Visitas'; }
+  .lot-followup-table td:nth-child(6)::before { content: 'Próxima visita'; }
+  .lot-followup-table td:nth-child(7)::before { content: 'Seguimiento'; }
+  .lot-followup-table td:nth-child(8)::before { content: 'Acciones'; }
+  .lot-followup-table td.lot-followup-lot { display: block; }
+  .lot-followup-table td.lot-followup-lot::before { display: block; margin-bottom: 5px; }
   .lot-weekly-candidate { grid-template-columns: 20px minmax(0, 1fr); }
   .lot-weekly-candidate > :last-child { grid-column: 2; }
   .lot-weekly-toolbar .field { width: 100%; }
@@ -329,6 +353,18 @@ dialog::backdrop { background: #17241c88; }
   .lot-weekly-program-actions button { flex: 1 1 120px; }
   .lot-weekly-program-date-editor { align-items: stretch; flex-direction: column; }
   .lot-weekly-program-date-editor .field { width: 100%; }
+  .lot-weekly-program-table { min-width: 0; }
+  .lot-weekly-program-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .lot-weekly-program-table, .lot-weekly-program-table tbody, .lot-weekly-program-table tr, .lot-weekly-program-table td { display: block; width: 100%; }
+  .lot-weekly-program-table tr { padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  .lot-weekly-program-table td { display: flex; gap: 10px; padding: 6px 0; border: 0; font-size: 13px; overflow-wrap: anywhere; }
+  .lot-weekly-program-table td::before { flex: 0 0 105px; color: #64746a; font-size: 12px; font-weight: 700; }
+  .lot-weekly-program-table td:nth-child(1)::before { content: 'Lote'; }
+  .lot-weekly-program-table td:nth-child(2)::before { content: 'Visita'; }
+  .lot-weekly-program-table td:nth-child(3)::before { content: 'Fecha original'; }
+  .lot-weekly-program-table td:nth-child(4)::before { content: 'Responsable'; }
+  .lot-weekly-program-table td:nth-child(5)::before { content: 'Fecha asignada'; }
+  .lot-weekly-program-table td:nth-child(6)::before { content: 'Estado'; }
   .record-status { font-size: 9px; }
   .record-row { flex-wrap: wrap; }
   .record-info { flex: 1 1 180px; }
@@ -343,6 +379,12 @@ dialog::backdrop { background: #17241c88; }
   .work-context-actions .secondary-button { width: 100%; }
   .record-detail-card { padding: 17px; }
   .record-detail-grid { grid-template-columns: 1fr; }
+  .form-actions { flex-wrap: wrap; }
+  .form-actions button { flex: 1 1 160px; }
+  .text-input, .select-input, .text-area { font-size: 16px; }
+  .zone-checkboxes label { min-height: 44px; padding: 6px 8px; font-size: 13px; }
+  .zone-checkboxes input { width: 20px; height: 20px; }
+  .record-view-button, .record-delete-button, .lot-followup-actions .record-view-button { min-height: 44px; }
   .page .section-heading { align-items: end; }
   .user-row { flex-wrap: wrap; }
   .user-info { flex: 1 1 calc(100% - 55px); }

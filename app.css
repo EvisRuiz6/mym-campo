@@ -253,6 +253,25 @@ dialog::backdrop { background: #17241c88; }
 .flight-report-table tbody tr:nth-child(even) { background: #f8faf8; }
 .flight-report-table tfoot th, .flight-report-table tfoot td { border-top: 1px solid var(--forest); border-bottom: 0; color: var(--forest); font-weight: 700; }
 .flight-report-data-note { margin: 10px 0 0; line-height: 1.5; }
+.flight-variation-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin: 24px 0; }
+.flight-variation-summary { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 18px; border: 1px solid #d8e9da; border-radius: 11px; background: #edf5ee; }
+.flight-variation-summary .eyebrow { margin-bottom: 5px; }
+.flight-variation-summary strong { display: block; color: var(--forest); font-size: 26px; overflow-wrap: anywhere; }
+.flight-variation-summary span { display: block; margin-top: 3px; color: #536b5b; font-size: 13px; }
+#flight-variation-status { margin: 14px 0; font-size: 13px; }
+.flight-variation-chart { display: grid; grid-template-columns: repeat(auto-fit, minmax(70px, 1fr)); gap: 14px 4px; padding: 16px 10px; background: var(--white); border: 1px solid var(--line); border-radius: 11px; }
+.flight-variation-bar { min-width: 0; min-height: 250px; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 6px 3px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--ink); cursor: pointer; }
+.flight-variation-bar:hover, .flight-variation-bar[aria-pressed="true"] { border-color: #a4c7aa; background: #edf5ee; }
+.flight-variation-bar:focus-visible { outline: 3px solid #63926d; outline-offset: -3px; }
+.flight-variation-value { font-size: 11px; font-weight: 700; overflow-wrap: anywhere; }
+.flight-variation-plot { height: 170px; width: 100%; display: flex; align-items: flex-end; justify-content: center; border-bottom: 1px solid #b8cbbd; background: repeating-linear-gradient(to top, transparent 0, transparent 41px, #edf2ee 42px, transparent 43px); }
+.flight-variation-fill { display: block; width: min(36px, 70%); min-height: 2px; border-radius: 3px 3px 0 0; background: #25a653; }
+.flight-variation-label { font-size: 12px; font-weight: 700; overflow-wrap: anywhere; }
+.flight-variation-details { margin-top: 24px; }
+.flight-variation-details h2 { margin: 0 0 8px; font-size: 19px; overflow-wrap: anywhere; }
+.flight-variation-flight { margin-top: 10px; padding: 12px; background: var(--white); border: 1px solid var(--line); border-radius: 9px; }
+.flight-variation-flight summary { min-height: 44px; cursor: pointer; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.flight-variation-flight .record-detail-grid { margin-top: 12px; }
 .record-detail-card { padding: 22px; }
 .record-detail-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
 .record-detail-heading h2 { margin: 0; font-size: 19px; }
@@ -382,6 +401,9 @@ dialog::backdrop { background: #17241c88; }
   .record-manage-actions .record-view-button { margin-left: 0; }
   .record-detail-dialog { width: calc(100% - 20px); max-height: calc(100dvh - 32px); }
   .flight-report-launch, .flight-report-toolbar { align-items: stretch; flex-direction: column; }
+  .flight-variation-filters { grid-template-columns: 1fr; }
+  .flight-variation-summary { align-items: stretch; flex-direction: column; }
+  .flight-variation-chart { grid-template-columns: repeat(auto-fit, minmax(70px, 1fr)); }
   .flight-report-launch .secondary-button, .flight-report-actions button { width: 100%; }
   .work-context-section { align-items: stretch; flex-direction: column; }
   .work-context-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }

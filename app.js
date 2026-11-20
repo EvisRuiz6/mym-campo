@@ -5,7 +5,7 @@ const PROFILE_KEY = 'mym-campo-auth-profile';
 const INVITE_PENDING_KEY = 'mym-campo-invite-pending';
 const LOT_LOOKUP_CACHE_KEY = 'mym-campo-lot-lookup:';
 const WORKSPACE_MENU_KEY = 'mym-campo-workspace-menu:';
-const WORKSPACE_PAGES = ['inicio', 'capturar', 'pendientes', 'registros', 'gestionar', 'seguimiento-lotes', 'programacion-semanal', 'usuarios'];
+const WORKSPACE_PAGES = ['inicio', 'capturar', 'pendientes', 'registros', 'gestionar', 'variacion-vuelo', 'seguimiento-lotes', 'programacion-semanal', 'usuarios'];
 const NO_EMAIL_AUTH_DOMAIN = 'users.mym-campo.invalid';
 const ROLE_OPTIONS = ['aereo', 'terrestre', 'supervisor', 'admin'];
 const modules = {
@@ -215,7 +215,7 @@ const childSchemas = {
 };
 const $ = (selector, root) => (root || document).querySelector(selector);
 const $$ = (selector, root) => [...(root || document).querySelectorAll(selector)];
-const state = { db: null, user: null, authSession: null, configured: false, syncConnected: false, syncBusy: false, syncIdleWaiters: [], syncRequested: false, flightActivityLaborBusy: false, flightActivityLaborQueue: Promise.resolve(), flightActivityLaborUpdatePromise: null, refreshPromise: null, currentModule: null, editingRecord: null, recordTimeTimer: null, lotLookup: Object.create(null), lotLookupRequests: new Map(), zoneOptions: [], zonesReady: false, usersLoadPromise: null, visitMap: null, flightReportRecords: [], acceptingInvite: false, lotFollowupPlans: [], lotFollowupVisits: [], lotWeeklyPrograms: [], lotFollowupLoadPromise: null, lotFollowupDateId: 0, editingLotFollowup: null, editingLotWeeklyProgramId: null, lotWeeklyProgramDraftKey: '', lotWeeklyProgramDraftLotCodes: [] };
+const state = { db: null, user: null, authSession: null, configured: false, syncConnected: false, syncBusy: false, syncIdleWaiters: [], syncRequested: false, flightActivityLaborBusy: false, flightActivityLaborQueue: Promise.resolve(), flightActivityLaborUpdatePromise: null, refreshPromise: null, currentModule: null, editingRecord: null, recordTimeTimer: null, lotLookup: Object.create(null), lotLookupRequests: new Map(), zoneOptions: [], zonesReady: false, usersLoadPromise: null, visitMap: null, flightReportRecords: [], flightVariationRecords: [], flightVariationLoadSeq: 0, flightVariationDrone: '', flightVariationSource: '', acceptingInvite: false, lotFollowupPlans: [], lotFollowupVisits: [], lotWeeklyPrograms: [], lotFollowupLoadPromise: null, lotFollowupDateId: 0, editingLotFollowup: null, editingLotWeeklyProgramId: null, lotWeeklyProgramDraftKey: '', lotWeeklyProgramDraftLotCodes: [] };
 
 function lotLookupCacheKey() {
   const scopeKey = [state.user.role, ...(state.user.allowedZones || []).slice().sort()].join(':');
@@ -1163,6 +1163,18 @@ function flightReportDate(value) {
 function flightReportNormalize(value) {
   return String(value || '').trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es');
 }
+function flightRecordOwnerKey(record) {
+  return record.ownerId ? 'id:' + record.ownerId : record.ownerUsername ? 'username:' + record.ownerUsername : '';
+}
+function flightRecordBelongsToUser(record, user) {
+  if (!record || !user) return false;
+  return record.ownerId ? record.ownerId === user.id : !!record.ownerUsername && record.ownerUsername === user.username;
+}
+function flightVariationScopedRecords(records, user) {
+  if (!user || user.status !== 'active') return [];
+  return records.filter(record => record && record.tipo === 'vuelos' && record.syncStatus !== 'delete-pending' &&
+    (user.role === 'admin' || flightRecordBelongsToUser(record, user)));
+}
 function flightReportFilterOptions(records, field) {
   const values = new Map();
   let hasMissing = false;
@@ -1194,7 +1206,7 @@ function flightReportData(records, filters) {
   const invalidDateRange = (fromValue && !from) || (toValue && !to) || (from && to && from > to);
   const sourceRecords = (Array.isArray(records) ? records : []).filter(record => record && record.tipo === 'vuelos');
   const groups = new Map(FLIGHT_REPORT_DRONES.map(drone => [drone, {
-    drone, flights: 0, hectares: 0, liters: 0, incompleteFlights: 0
+    drone, flights: 0, hectares: 0, liters: 0, incompleteFlights: 0, records: []
   }]));
   const totals = {
     flights: 0,
@@ -1208,6 +1220,7 @@ function flightReportData(records, filters) {
   };
   if (!invalidDateRange) {
     for (const record of sourceRecords) {
+      if (selected.owner && flightRecordOwnerKey(record) !== selected.owner) continue;
       const finca = flightReportValue(record, 'finca');
       const zona = flightReportValue(record, 'zona');
       const labor = flightReportValue(record, 'labor');
@@ -1232,9 +1245,10 @@ function flightReportData(records, filters) {
 
       const drone = flightReportValue(record, 'dron') || 'Sin identificar';
       if (!groups.has(drone)) {
-        groups.set(drone, { drone, flights: 0, hectares: 0, liters: 0, incompleteFlights: 0 });
+        groups.set(drone, { drone, flights: 0, hectares: 0, liters: 0, incompleteFlights: 0, records: [] });
       }
       const group = groups.get(drone);
+      group.records.push(record);
       const area = flightNumber(flightReportValue(record, 'area_ha'));
       const liters = flightNumber(flightReportValue(record, 'litros'));
       let validArea = area !== null && area >= 0;
@@ -2447,6 +2461,163 @@ function handleFlightReportError(error) {
   $('#flight-report-status').textContent = error.message || 'No se pudieron cargar las capturas de Vuelos.';
   toast('No se pudo actualizar el resumen de Vuelos.');
 }
+function mergeFlightVariationRecords(remote, local, user, offline) {
+  const cached = flightVariationScopedRecords(local, user);
+  if (offline) return cached;
+  const rows = new Map(flightVariationScopedRecords(remote, user).map(record => [record.id, record]));
+  const ownerIds = new Map(remote.filter(record => record.ownerUsername && record.ownerId)
+    .map(record => [record.ownerUsername, record.ownerId]));
+  if (user.username && user.id) ownerIds.set(user.username, user.id);
+  for (const record of local) {
+    if (!record || record.tipo !== 'vuelos' ||
+        (user.role !== 'admin' && !flightRecordBelongsToUser(record, user))) continue;
+    if (record.syncStatus === 'delete-pending') rows.delete(record.id);
+    else if (record.syncStatus === 'pending') {
+      const ownerId = record.ownerId || ownerIds.get(record.ownerUsername);
+      rows.set(record.id, ownerId ? { ...record, ownerId } : record);
+    }
+  }
+  return [...rows.values()];
+}
+function resetFlightVariation() {
+  state.flightVariationLoadSeq += 1;
+  state.flightVariationRecords = [];
+  state.flightVariationDrone = '';
+  state.flightVariationSource = '';
+  for (const id of ['flight-variation-from', 'flight-variation-to', 'flight-variation-labor', 'flight-variation-owner']) {
+    $('#' + id).value = '';
+  }
+  $('#flight-variation-owner-field').hidden = true;
+  $('#flight-variation-refresh').disabled = false;
+  $('#flight-variation-chart').innerHTML = '';
+  $('#flight-variation-details').innerHTML = '';
+  $('#flight-variation-total').textContent = '0.00 ha';
+  $('#flight-variation-count').textContent = '0 vuelos';
+  $('#flight-variation-status').textContent = 'Carga los vuelos para consultar la gráfica.';
+}
+function updateFlightVariationOptions() {
+  const records = flightVariationScopedRecords(state.flightVariationRecords, state.user);
+  const labor = $('#flight-variation-labor');
+  const selectedLabor = labor.value;
+  const laborOptions = flightReportFilterOptions(records, 'labor');
+  labor.innerHTML = '<option value="">Todas las labores</option>' +
+    laborOptions.map(option => '<option value="' + esc(option.value) + '">' + esc(option.label) + '</option>').join('');
+  labor.value = laborOptions.some(option => option.value === selectedLabor) ? selectedLabor : '';
+  const owner = $('#flight-variation-owner');
+  const selectedOwner = owner.value;
+  const owners = new Map();
+  for (const record of records) {
+    const key = flightRecordOwnerKey(record);
+    const name = record.ownerName || record.ownerUsername || 'Usuario';
+    const label = record.ownerName && record.ownerUsername ? name + ' (@' + record.ownerUsername + ')' : name;
+    if (key && !owners.has(key)) owners.set(key, label);
+  }
+  owner.innerHTML = '<option value="">Todos los usuarios</option>' +
+    [...owners.entries()].sort((a, b) => a[1].localeCompare(b[1], 'es'))
+      .map(([key, name]) => '<option value="' + esc(key) + '">' + esc(name) + '</option>').join('');
+  owner.value = owners.has(selectedOwner) ? selectedOwner : '';
+  $('#flight-variation-owner-field').hidden = !isActiveAdmin();
+}
+function renderFlightVariation() {
+  const records = flightVariationScopedRecords(state.flightVariationRecords, state.user);
+  const filters = {
+    from: $('#flight-variation-from').value,
+    to: $('#flight-variation-to').value,
+    labor: $('#flight-variation-labor').value,
+    owner: isActiveAdmin() ? $('#flight-variation-owner').value : ''
+  };
+  const report = flightReportData(records, filters);
+  $('#flight-variation-total').textContent = formatFlightReportNumber(report.totals.hectares) + ' ha';
+  $('#flight-variation-count').textContent = report.totals.flights + (report.totals.flights === 1 ? ' vuelo' : ' vuelos');
+  const notes = [];
+  if (report.invalidDateRange) notes.push('La fecha inicial debe ser válida y anterior o igual a la fecha final.');
+  else if (!report.totals.flights) notes.push('No hay vuelos que coincidan con los filtros.');
+  if (report.totals.invalidAreaRecords) notes.push(report.totals.invalidAreaRecords + ' vuelo(s) sin hectáreas válidas no se sumaron.');
+  if (report.totals.missingDateIncluded) notes.push(report.totals.missingDateIncluded + ' vuelo(s) sin fecha válida se incluyen sin filtro de fechas.');
+  if (report.totals.missingDateExcluded) notes.push(report.totals.missingDateExcluded + ' vuelo(s) sin fecha válida se excluyeron del rango.');
+  $('#flight-variation-status').textContent = [state.flightVariationSource || '', ...notes].filter(Boolean).join(' ');
+  if (report.invalidDateRange) {
+    $('#flight-variation-total').textContent = '—';
+    $('#flight-variation-count').textContent = 'Rango no válido';
+    $('#flight-variation-chart').innerHTML = '';
+    $('#flight-variation-details').innerHTML = '';
+    return;
+  }
+  const maxArea = report.rows.reduce((max, row) => Math.max(max, row.hectares), 0);
+  $('#flight-variation-chart').innerHTML = report.rows.map(row => {
+    const height = maxArea ? Math.max(0, row.hectares / maxArea * 100) : 0;
+    const label = row.drone + ': ' + formatFlightReportNumber(row.hectares) + ' hectáreas, ' + row.flights + ' vuelos';
+    return '<button type="button" class="flight-variation-bar" data-flight-variation-drone="' + esc(row.drone) +
+      '" aria-label="' + esc(label) + '" aria-pressed="' + String(state.flightVariationDrone === row.drone) + '">' +
+      '<span class="flight-variation-value">' + formatFlightReportNumber(row.hectares) + ' ha</span>' +
+      '<span class="flight-variation-plot" aria-hidden="true"><span class="flight-variation-fill" style="height:' + height + '%"></span></span>' +
+      '<span class="flight-variation-label">' + esc(row.drone) + '</span></button>';
+  }).join('');
+  const selected = report.rows.find(row => row.drone === state.flightVariationDrone);
+  const detail = $('#flight-variation-details');
+  if (!selected) {
+    detail.innerHTML = '<p class="field-hint">Selecciona un dron para ver sus vuelos.</p>';
+    return;
+  }
+  const flights = selected.records.map(record => {
+    const date = flightReportDate(flightReportValue(record, 'fecha'));
+    const area = flightNumber(flightReportValue(record, 'area_ha'));
+    const summary = [
+      date ? formatDate(date) : 'Sin fecha',
+      record.ownerName || record.ownerUsername || 'Usuario',
+      flightReportValue(record, 'labor') || 'Sin labor',
+      flightReportValue(record, 'finca') || 'Sin finca',
+      area !== null && area >= 0 ? formatFlightReportNumber(area) + ' ha' : 'Hectáreas sin dato'
+    ].join(' · ');
+    return '<details class="flight-variation-flight"><summary>' + esc(summary) + '</summary>' + recordDetailsMarkup(record) + '</details>';
+  }).join('');
+  detail.innerHTML = '<h2>' + esc(selected.drone) + ' · ' + formatFlightReportNumber(selected.hectares) +
+    ' ha</h2><p class="field-hint">' + selected.flights + (selected.flights === 1 ? ' vuelo' : ' vuelos') +
+    '. Abre cada vuelo para consultar sus datos.</p>' + (flights || emptyState('Este dron no tiene vuelos con los filtros seleccionados.'));
+}
+async function loadFlightVariation() {
+  if (!state.user || state.user.status !== 'active') return;
+  const user = { ...state.user };
+  const sequence = ++state.flightVariationLoadSeq;
+  const button = $('#flight-variation-refresh');
+  button.disabled = true;
+  $('#flight-variation-status').textContent = 'Cargando vuelos…';
+  try {
+    const local = (await getRecords()).filter(recordHasLotAccess);
+    const offline = !navigator.onLine || !state.configured;
+    const remote = [];
+    if (!offline) {
+      const ownerFilter = user.role === 'admin' ? '' : '&owner_id=eq.' + encodeURIComponent(user.id);
+      for (let offset = 0, page; ; offset += 1000) {
+        page = await cloudRequest('field_records?tipo=eq.vuelos' + ownerFilter +
+          '&select=id,owner_id,tipo,created_at,schema_version,datos,review_status,reviewed_by,reviewed_at,review_note,profiles!field_records_owner_id_fkey(username,display_name)&order=created_at.desc,id.asc&limit=1000&offset=' + offset);
+        remote.push(...page.map(mapCloudRecord));
+        if (page.length < 1000) break;
+      }
+    }
+    if (sequence !== state.flightVariationLoadSeq || !state.user || state.user.id !== user.id || state.user.role !== user.role) return;
+    state.flightVariationRecords = mergeFlightVariationRecords(remote, local, user, offline);
+    state.flightVariationSource = offline
+      ? 'Sin conexión al espacio compartido: se muestran solo los vuelos disponibles en este dispositivo.'
+      : 'Se muestran los vuelos sincronizados y las capturas pendientes de este dispositivo.';
+    updateFlightVariationOptions();
+    renderFlightVariation();
+  } catch (error) {
+    if (sequence !== state.flightVariationLoadSeq) return;
+    state.flightVariationRecords = [];
+    state.flightVariationSource = '';
+    updateFlightVariationOptions();
+    renderFlightVariation();
+    $('#flight-variation-total').textContent = '—';
+    $('#flight-variation-count').textContent = 'Datos no disponibles';
+    $('#flight-variation-chart').innerHTML = '';
+    $('#flight-variation-details').innerHTML = '';
+    $('#flight-variation-status').textContent = 'No se pudieron cargar los vuelos. Comprueba la conexión y pulsa Actualizar datos.';
+    console.error('No se pudieron cargar los vuelos para la gráfica.', error);
+  } finally {
+    if (sequence === state.flightVariationLoadSeq) button.disabled = false;
+  }
+}
 function recordDetailLabel(key) {
   const label = String(key).replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').trim();
   return label ? label.charAt(0).toLocaleUpperCase('es') + label.slice(1) : 'Dato';
@@ -3479,10 +3650,7 @@ function emptyState(message) { return '<div class="empty-state">' + esc(message)
 async function refreshLists() {
   if (!state.db || !state.user) return;
   const localRecords = await getRecords();
-  let records = localRecords.filter(record =>
-    record.syncStatus !== 'delete-pending' && recordHasLotAccess(record)
-  ).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  if (!['admin', 'supervisor'].includes(state.user.role)) records = records.filter(record => record.ownerUsername === state.user.username);
+  const records = visibleLocalRecords(localRecords).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const pending = records.filter(record => record.syncStatus === 'pending');
   const queuedDeletions = localRecords.filter(record =>
     record.syncStatus === 'delete-pending' &&
@@ -4724,6 +4892,7 @@ function navigate(page) {
   }
   if (page === 'pendientes' || page === 'registros' || page === 'gestionar' || page === 'inicio') refreshLists();
   if (page === 'usuarios') refreshUsers().catch(handleCloudError);
+  if (page === 'variacion-vuelo') void loadFlightVariation();
   if (page === 'seguimiento-lotes' || page === 'programacion-semanal') {
     loadLotFollowup().catch(error => console.error('No se pudo actualizar el seguimiento de lotes.', error));
   }
@@ -4750,6 +4919,7 @@ function handleCloudError(error) {
   if (state.user) toast(error.message || 'No se pudo conectar con el espacio compartido.');
 }
 async function startSession(user, session) {
+  resetFlightVariation();
   state.authSession = session;
   state.visitMap = null;
   clearLotFollowupData();
@@ -4798,6 +4968,7 @@ async function endSession() {
   setMobileMenu(false);
   state.visitMap = null;
   state.flightReportRecords = [];
+  resetFlightVariation();
   clearLotFollowupData();
   const mapDialog = $('#visit-map-dialog');
   if (mapDialog.open) mapDialog.close();
@@ -5061,7 +5232,7 @@ $('#capture-form').addEventListener('submit', async event => {
     }
     : {
       id: recordId, tipo: state.currentModule, createdAt, schemaVersion: 5, syncStatus: 'pending',
-      syncOrigin: 'new', ownerUsername: state.user.username, ownerName: state.user.displayName, ownerRole: state.user.role, datos
+      syncOrigin: 'new', ownerId: state.user.id, ownerUsername: state.user.username, ownerName: state.user.displayName, ownerRole: state.user.role, datos
     };
   if (editing) {
     record.reviewStatus = 'pending';
@@ -5388,8 +5559,25 @@ $('#visit-map-stage').addEventListener('keydown', event => {
 });
 function visibleLocalRecords(records) {
   const scoped = records.filter(record => record.syncStatus !== 'delete-pending' && recordHasLotAccess(record));
-  return ['admin', 'supervisor'].includes(state.user.role) ? scoped : scoped.filter(record => record.ownerUsername === state.user.username);
+  if (isActiveAdmin()) return scoped;
+  if (state.user.role === 'supervisor') {
+    return scoped.filter(record => record.tipo !== 'vuelos' || flightRecordBelongsToUser(record, state.user));
+  }
+  return scoped.filter(record => record.tipo === 'vuelos'
+    ? flightRecordBelongsToUser(record, state.user)
+    : record.ownerUsername === state.user.username);
 }
+$('#flight-variation-filters').addEventListener('change', renderFlightVariation);
+$('#flight-variation-refresh').addEventListener('click', () => { void loadFlightVariation(); });
+$('#flight-variation-chart').addEventListener('click', event => {
+  const button = event.target.closest('[data-flight-variation-drone]');
+  if (!button) return;
+  state.flightVariationDrone = button.dataset.flightVariationDrone;
+  renderFlightVariation();
+  const replacement = $$('[data-flight-variation-drone]', $('#flight-variation-chart'))
+    .find(item => item.dataset.flightVariationDrone === state.flightVariationDrone);
+  if (replacement) replacement.focus({ preventScroll: true });
+});
 $('#flight-report-filters').addEventListener('change', renderFlightReport);
 $('#flight-report-refresh').addEventListener('click', () => loadFlightReportRecords().catch(handleFlightReportError));
 $('#flight-report-pdf').addEventListener('click', () => {

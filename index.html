@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#174b38">
   <meta name="description" content="Captura de labores aéreas y terrestres para MyM Data">
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="app.css?v=25">
+  <link rel="stylesheet" href="app.css?v=26">
   <title>MyM Campo</title>
 </head>
 <body>
@@ -103,6 +103,7 @@
           <summary>Registros</summary>
           <button class="nav-item" data-page="registros"><span class="nav-icon">▤</span> Registros</button>
           <button class="nav-item" data-page="gestionar"><span class="nav-icon">✎</span> Administrar capturas</button>
+          <button class="nav-item" data-page="variacion-vuelo"><span class="nav-icon">▥</span> Variación por vuelo</button>
         </details>
         <details class="nav-group reviewer-nav" data-menu-group="seguimiento" open hidden>
           <summary>Seguimiento</summary>
@@ -163,6 +164,25 @@
           <p class="record-query-hint">Los cambios de registros sincronizados requieren conexión. Las capturas que siguen en cola pueden editarse o eliminarse sin conexión; editar una captura revisada la devuelve a revisión pendiente.</p>
           <div class="record-toolbar"><label class="search-field">⌕ <input id="manage-record-search" type="search" placeholder="Buscar por finca, actividad o responsable" aria-label="Buscar capturas para administrar"></label><span id="manage-record-total" class="muted-inline">0 capturas</span></div>
           <div id="manage-record-list" class="record-list"></div>
+        </section>
+
+        <section id="page-variacion-vuelo" class="page" hidden>
+          <p class="eyebrow">APLICACIONES AÉREAS</p>
+          <h1>Variación por vuelo</h1>
+          <p class="subtitle">Suma de hectáreas aplicadas por dron. Selecciona una barra para ver sus vuelos.</p>
+          <div id="flight-variation-filters" class="flight-variation-filters">
+            <div class="field"><label class="field-label" for="flight-variation-from">Desde</label><input id="flight-variation-from" class="text-input" type="date"></div>
+            <div class="field"><label class="field-label" for="flight-variation-to">Hasta</label><input id="flight-variation-to" class="text-input" type="date"></div>
+            <div class="field"><label class="field-label" for="flight-variation-labor">Labor</label><select id="flight-variation-labor" class="select-input"><option value="">Todas las labores</option></select></div>
+            <div id="flight-variation-owner-field" class="field" hidden><label class="field-label" for="flight-variation-owner">Usuario</label><select id="flight-variation-owner" class="select-input"><option value="">Todos los usuarios</option></select></div>
+          </div>
+          <div class="flight-variation-summary">
+            <div><p class="eyebrow">TOTAL APLICADO</p><strong id="flight-variation-total">0.00 ha</strong><span id="flight-variation-count">0 vuelos</span></div>
+            <button id="flight-variation-refresh" class="secondary-button" type="button">Actualizar datos</button>
+          </div>
+          <p id="flight-variation-status" class="field-hint" role="status" aria-live="polite">Carga los vuelos para consultar la gráfica.</p>
+          <div id="flight-variation-chart" class="flight-variation-chart" aria-label="Hectáreas aplicadas por dron"></div>
+          <section id="flight-variation-details" class="flight-variation-details" aria-live="polite"></section>
         </section>
 
         <section id="page-seguimiento-lotes" class="page" hidden>
@@ -378,6 +398,6 @@
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </div>
   <script src="config.js"></script>
-  <script src="app.js?v=54"></script>
+  <script src="app.js?v=55"></script>
 </body>
 </html>

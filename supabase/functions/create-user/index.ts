@@ -95,10 +95,16 @@ Deno.serve(async request => {
 
   if (updateError || !profile) {
     const { error: deleteError } = await adminClient.auth.admin.deleteUser(created.user.id);
-    console.error('No se pudo completar el perfil de la cuenta sin correo.', { updateError, deleteError });
+    let cleanupError: Error | null = null;
+    if (!deleteError) {
+      const cleanup = await adminClient.from('profiles').delete()
+        .eq('id', created.user.id).is('auth_user_id', null).select('id').maybeSingle();
+      cleanupError = cleanup.error || (!cleanup.data ? new Error('No se encontró el perfil incompleto para limpiarlo.') : null);
+    }
+    console.error('No se pudo completar el perfil de la cuenta sin correo.', { updateError, deleteError, cleanupError });
     return respond(502, {
-      message: deleteError
-        ? 'No se pudo completar el perfil ni limpiar la cuenta incompleta. Contacta al administrador del sistema.'
+      message: deleteError || cleanupError
+        ? 'No se pudo completar ni limpiar por completo la cuenta incompleta. Contacta al administrador del sistema.'
         : 'No se pudo completar el perfil. La cuenta incompleta fue eliminada; inténtalo de nuevo.'
     });
   }

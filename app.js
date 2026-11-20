@@ -5856,13 +5856,14 @@ async function deleteMember(button) {
   const userId = button.dataset.memberDelete;
   if (userId === state.user.id) throw new Error('No puedes eliminar tu propia cuenta.');
   if (!window.confirm('¿Eliminar la cuenta de ' + button.dataset.memberName +
-      '? La persona perderá el acceso. Sus capturas y su historial de visitas se conservarán.')) return;
+      '? La persona perderá el acceso. Se conservarán sus capturas sincronizadas y su historial de visitas. ' +
+      'Las capturas pendientes de otros dispositivos ya no podrán sincronizarse con esta cuenta.')) return;
   button.disabled = true;
   try {
     await apiRequest('/functions/v1/delete-user', {
       method: 'POST', token: await accessToken(), body: { user_id: userId }
     });
-    authMessage('user-create-message', 'Cuenta eliminada. Sus capturas y visitas se conservaron.');
+    authMessage('user-create-message', 'Cuenta eliminada. Sus capturas sincronizadas y visitas se conservaron.');
     $('#user-create-message').classList.add('success-message');
     await refreshUsers();
   } finally {

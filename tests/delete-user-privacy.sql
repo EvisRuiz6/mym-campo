@@ -5,6 +5,7 @@ do $$
 declare
   target_id uuid := gen_random_uuid();
   reviewer_id uuid := gen_random_uuid();
+  incomplete_id uuid := gen_random_uuid();
   record_id uuid := gen_random_uuid();
   program_id uuid := gen_random_uuid();
   username text;
@@ -42,6 +43,12 @@ begin
   exception when check_violation then rejected := true;
   end;
   if not rejected then raise exception 'A deleted account could be reactivated'; end if;
+  username := 'test_' || substr(replace(incomplete_id::text, '-', ''), 1, 20);
+  insert into auth.users(id, email, raw_user_meta_data, raw_app_meta_data)
+  values (incomplete_id, username || '@example.invalid', jsonb_build_object('username', username, 'display_name', 'Incomplete'), '{}'::jsonb);
+  delete from auth.users where id = incomplete_id;
+  delete from public.profiles where id = incomplete_id and auth_user_id is null;
+  if not found then raise exception 'An unreferenced incomplete account could not be cleaned up'; end if;
 end;
 $$;
 rollback;

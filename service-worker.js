@@ -1,5 +1,5 @@
-const CACHE = 'mym-campo-shell-v63';
-const SHELL = ['./', './index.html', './config.js', './app.css?v=29', './app.js?v=58', './excel-export.js?v=1', './vendor/exceljs-4.4.0.min.js', './manifest.json', './icon.svg'];
+const CACHE = 'mym-campo-shell-v64';
+const SHELL = ['./', './index.html', './config.js', './app.css?v=29', './app.js?v=59', './excel-export.js?v=2', './vendor/exceljs-4.4.0.min.js', './manifest.json', './icon.svg'];
 self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting())));
 self.addEventListener('activate', event => event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key)))).then(() => self.clients.claim())));
 self.addEventListener('fetch', event => {

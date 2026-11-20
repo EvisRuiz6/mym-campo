@@ -22,15 +22,42 @@ const ExcelExport = (() => {
     }
     return '';
   }
-  function matchingRows(record, filters) {
-    if (!record || !record.datos || typeof record.datos !== 'object' || Array.isArray(record.datos)) return [];
+  function recordDetails(record) {
     const data = record.datos;
     const details = data.subregistros && data.subregistros.malezas_detalle;
-    const children = record.tipo === 'malezas' && Array.isArray(details) && details.length
+    return record.tipo === 'malezas' && Array.isArray(details) && details.length
       ? details.map((detail, index) => ({ detail, index, kind: 'malezas' }))
       : record.tipo === 'clima' && Array.isArray(data.lecturas) && data.lecturas.length
         ? data.lecturas.map((detail, index) => ({ detail, index, kind: 'clima' }))
         : [{ detail: null, index: 0, kind: '' }];
+  }
+  function rowLabors(data, detail) {
+    const childLabor = firstValue(detail, ['labor', 'LABOR']);
+    return childLabor ? [childLabor] : ['labor', 'LABOR', 'labor_aplicacion', 'labor_pcpm'].map(key => scalar(data[key])).filter(Boolean);
+  }
+  function filterOptions(records) {
+    const values = { farm: new Map(), zone: new Map(), labor: new Map(), owner: new Map() };
+    const add = (key, value) => {
+      const text = scalar(value);
+      if (text && !values[key].has(normalize(text))) values[key].set(normalize(text), text);
+    };
+    for (const record of records) {
+      if (!record || !record.datos || typeof record.datos !== 'object' || Array.isArray(record.datos)) continue;
+      const data = record.datos;
+      add('farm', firstValue(data, ['finca', 'FINCA']));
+      add('zone', firstValue(data, ['zona', 'ZONA', 'zone', 'ZONE']));
+      add('owner', record.owner_username);
+      for (const { detail } of recordDetails(record)) {
+        for (const labor of rowLabors(data, detail)) add('labor', labor);
+      }
+    }
+    return Object.fromEntries(Object.entries(values).map(([key, entries]) =>
+      [key, [...entries.values()].sort((a, b) => a.localeCompare(b, 'es', { numeric: true, sensitivity: 'base' }))]));
+  }
+  function matchingRows(record, filters) {
+    if (!record || !record.datos || typeof record.datos !== 'object' || Array.isArray(record.datos)) return [];
+    const data = record.datos;
+    const children = recordDetails(record);
     return children.filter(({ detail }) => {
       const date = dateValue(firstValue(detail, ['fecha', 'FECHA', 'Fecha']) || firstValue(data, ['fecha', 'FECHA', 'Fecha']));
       if ((filters.from || filters.to) && !date) return false;
@@ -38,8 +65,7 @@ const ExcelExport = (() => {
       if (filters.farm && normalize(firstValue(data, ['finca', 'FINCA'])) !== normalize(filters.farm)) return false;
       if (filters.zone && normalize(firstValue(data, ['zona', 'ZONA', 'zone', 'ZONE'])) !== normalize(filters.zone)) return false;
       if (filters.owner && normalize(record.owner_username) !== normalize(filters.owner)) return false;
-      const childLabor = firstValue(detail, ['labor', 'LABOR']);
-      const labors = childLabor ? [childLabor] : ['labor', 'LABOR', 'labor_aplicacion', 'labor_pcpm'].map(key => scalar(data[key])).filter(Boolean);
+      const labors = rowLabors(data, detail);
       return !filters.labor || labors.some(labor => normalize(labor) === normalize(filters.labor));
     }).map(({ detail, index, kind }) => {
       const copy = { ...data };
@@ -168,6 +194,6 @@ const ExcelExport = (() => {
     }
     return { buffer: await workbook.xlsx.writeBuffer(), totalRows };
   }
-  return { matchingRows, typedFields, cellValue, flatten, dateValue, createWorkbook };
+  return { matchingRows, filterOptions, typedFields, cellValue, flatten, dateValue, createWorkbook };
 })();
 if (typeof module !== 'undefined' && module.exports) module.exports = ExcelExport;

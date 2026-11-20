@@ -31,6 +31,20 @@ test('applies every filter to individual malezas details, including their own da
   assert.equal(exportExcel.matchingRows(row, { ...filters, zone: '1' }).length, 0);
 });
 
+test('filter options use the same fields as exports, including each Malezas detail and historical owners', () => {
+  const records = [
+    record('1', 'malezas', { FINCA: 'Finca Á', ZONA: '01', LABOR: 'Respaldo',
+      subregistros: { malezas_detalle: [{ LABOR: 'Soca' }, { LABOR: 'Plantilla' }, {}] } }, 'antiguo'),
+    record('2', 'vuelos', { finca: 'finca a', zona: '01', labor_aplicacion: 'Madurante' }, 'actual'),
+    record('3', 'clima', { finca: '', zona: '' }, '')
+  ];
+  assert.deepEqual(exportExcel.filterOptions(records), {
+    farm: ['Finca Á'], zone: ['01'], labor: ['Madurante', 'Plantilla', 'Respaldo', 'Soca'],
+    owner: ['actual', 'antiguo']
+  });
+  assert.equal(exportExcel.matchingRows(records[0], { labor: 'Respaldo' }).length, 1);
+});
+
 test('writes a real workbook with separate sheets, typed cells, detail rows and attachment metadata', async () => {
   const records = [
     record('v1', 'vuelos', { fecha: '2026-03-01', finca: 'F', zona: '1', labor: 'Madurante',
@@ -133,4 +147,58 @@ test('paginates server records and reports failures without producing a partial 
   assert.equal(downloaded, 1);
   assert.equal(controls['#excel-export-submit'].disabled, false);
   assert.match(controls['#excel-export-status'].textContent, /No se pudo descargar Excel.*red interrumpida/);
+});
+
+test('loads dropdown options across pages, keeps selections, and offers retry on error', async () => {
+  const start = source.indexOf('let excelExportSequence = 0;');
+  const end = source.indexOf('\nfunction handleCloudError(', start);
+  const controls = {
+    '#excel-options-status': {}, '#excel-options-retry': {},
+    '#excel-farm': { value: 'Anterior' }, '#excel-zone': { value: '' },
+    '#excel-labor': { value: '' }, '#excel-owner': { value: '' }
+  };
+  let calls = 0, fail = false;
+  const state = { user: { id: 'admin' }, configured: true };
+  const run = runInNewContext(source.slice(start, end) + '\n({ loadExcelFilterOptions })', {
+    state, modules, isActiveAdmin: () => !!state.user, navigator: { onLine: true },
+    $: selector => controls[selector], esc: text => String(text).replaceAll('"', '&quot;'),
+    ExcelExport: exportExcel, console: { error() {} },
+    cloudRequest: async () => {
+      if (fail) throw new Error('red interrumpida');
+      calls++;
+      if (calls === 1) return Array.from({ length: 250 }, (_, i) =>
+        ({ ...record(String(i), 'vuelos', { finca: 'Finca A' }), created_at: '2026-03-01T10:00:00Z' }));
+      return [record('last', 'vuelos', { finca: 'Finca B', zona: '3', labor: 'Soca' }, 'otro')];
+    }
+  });
+  await run.loadExcelFilterOptions();
+  assert.equal(calls, 2);
+  assert.match(controls['#excel-farm'].innerHTML, /Finca A/);
+  assert.match(controls['#excel-farm'].innerHTML, /Finca B/);
+  assert.match(controls['#excel-farm'].innerHTML, /Anterior/);
+  assert.equal(controls['#excel-farm'].value, 'Anterior');
+  assert.match(controls['#excel-owner'].innerHTML, /otro/);
+  fail = true;
+  await run.loadExcelFilterOptions();
+  assert.equal(controls['#excel-options-retry'].hidden, false);
+  assert.match(controls['#excel-options-status'].textContent, /red interrumpida/);
+  assert.match(controls['#excel-farm'].innerHTML, /Finca B/);
+});
+
+test('ignores dropdown responses from a previous user session', async () => {
+  const start = source.indexOf('let excelExportSequence = 0;');
+  const end = source.indexOf('\nfunction handleCloudError(', start);
+  const controls = { '#excel-options-status': {}, '#excel-options-retry': {} };
+  const state = { user: { id: 'admin' }, configured: true };
+  let resolve;
+  const run = runInNewContext(source.slice(start, end) + '\n({ loadExcelFilterOptions })', {
+    state, modules, isActiveAdmin: () => !!state.user, navigator: { onLine: true },
+    $: selector => controls[selector], ExcelExport: exportExcel,
+    cloudRequest: () => new Promise(done => { resolve = done; }), console: { error() {} }
+  });
+  const pending = run.loadExcelFilterOptions();
+  state.user = { id: 'different' };
+  resolve([record('1', 'vuelos', { finca: 'Finca A' })]);
+  await pending;
+  assert.match(controls['#excel-options-status'].textContent, /Cargando/);
 });

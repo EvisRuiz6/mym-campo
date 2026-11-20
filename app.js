@@ -5138,7 +5138,10 @@ function navigate(page) {
   }
   if (page === 'pendientes' || page === 'registros' || page === 'gestionar' || page === 'inicio') refreshLists();
   if (page === 'usuarios') refreshUsers().catch(handleCloudError);
-  if (page === 'exportar-excel') renderExcelModules();
+  if (page === 'exportar-excel') {
+    renderExcelModules();
+    void loadExcelFilterOptions();
+  }
   if (page === 'variacion-vuelo') void loadFlightVariation();
   if (page === 'clima-grafica') void loadClimateChart();
   if (page === 'seguimiento-lotes' || page === 'programacion-semanal') {
@@ -5161,18 +5164,79 @@ function downloadJson(records, name) {
   URL.revokeObjectURL(url);
 }
 let excelExportSequence = 0;
+let excelOptionsSequence = 0;
+const excelFilterLabels = { farm: 'Todas las fincas', zone: 'Todas las zonas', labor: 'Todas las labores', owner: 'Todos los usuarios' };
 function resetExcelExport() {
   excelExportSequence++;
+  excelOptionsSequence++;
   $('#excel-export-form').reset();
   $('#excel-export-modules').innerHTML = '';
   $('#excel-export-status').textContent = '';
   $('#excel-export-submit').disabled = false;
+  for (const [key, label] of Object.entries(excelFilterLabels)) {
+    $('#excel-' + key).innerHTML = '<option value="">' + esc(label) + '</option>';
+  }
+  $('#excel-options-status').textContent = '';
+  $('#excel-options-retry').hidden = true;
 }
 function renderExcelModules() {
   const container = $('#excel-export-modules');
   if (container.children.length) return;
   container.innerHTML = Object.entries(modules).map(([key, module]) =>
     '<label><input type="checkbox" name="module" value="' + esc(key) + '" checked><span>' + esc(module.title) + '</span></label>').join('');
+}
+async function fetchExcelRecords(selected, isCurrent) {
+  const records = [];
+  let afterCreated = null, afterId = null;
+  for (;;) {
+    const page = await cloudRequest('rpc/admin_export_field_records', {
+      method: 'POST',
+      body: { p_modules: selected, p_after_created: afterCreated, p_after_id: afterId, p_limit: 250 }
+    });
+    if (!isCurrent()) return null;
+    if (!Array.isArray(page) || page.length > 250) throw new Error('La base de datos devolvió una respuesta de exportación no válida.');
+    records.push(...page);
+    if (page.length < 250) return records;
+    const last = page[page.length - 1];
+    if (!last.created_at || !last.id || (last.created_at === afterCreated && last.id === afterId)) {
+      throw new Error('No se pudo continuar la consulta de exportación.');
+    }
+    afterCreated = last.created_at;
+    afterId = last.id;
+  }
+}
+async function loadExcelFilterOptions() {
+  if (!isActiveAdmin()) return;
+  const userId = state.user.id;
+  const sequence = ++excelOptionsSequence;
+  const isCurrent = () => sequence === excelOptionsSequence && isActiveAdmin() && state.user.id === userId;
+  const status = $('#excel-options-status');
+  const retry = $('#excel-options-retry');
+  status.textContent = 'Cargando opciones de las capturas sincronizadas…';
+  retry.hidden = true;
+  try {
+    if (!navigator.onLine || !state.configured) throw new Error('Conéctate al espacio compartido.');
+    const records = await fetchExcelRecords(Object.keys(modules), isCurrent);
+    if (!records || !isCurrent()) return;
+    const options = ExcelExport.filterOptions(records);
+    for (const [key, label] of Object.entries(excelFilterLabels)) {
+      const select = $('#excel-' + key);
+      const selected = select.value;
+      const items = options[key].slice();
+      if (selected && !items.includes(selected)) items.push(selected);
+      select.innerHTML = '<option value="">' + esc(label) + '</option>' +
+        items.map(value => '<option value="' + esc(value) + '">' + esc(value) + '</option>').join('');
+      select.value = selected;
+    }
+    status.textContent = records.length
+      ? 'Opciones obtenidas de las capturas sincronizadas de todos los módulos.'
+      : 'No hay capturas sincronizadas para mostrar opciones de filtro.';
+  } catch (error) {
+    if (!isCurrent()) return;
+    console.error('No se pudieron cargar las opciones de exportación.', error);
+    status.textContent = 'No se pudieron cargar las opciones de filtro. ' + (error.message || 'Vuelve a intentarlo.');
+    retry.hidden = false;
+  }
 }
 async function downloadAdminExcel(event) {
   event.preventDefault();
@@ -5200,24 +5264,9 @@ async function downloadAdminExcel(event) {
   status.textContent = 'Consultando las capturas sincronizadas…';
   try {
     if (!navigator.onLine || !state.configured) throw new Error('Conéctate al espacio compartido para descargar las capturas.');
-    const records = [];
-    let afterCreated = null, afterId = null;
-    for (;;) {
-      const page = await cloudRequest('rpc/admin_export_field_records', {
-        method: 'POST',
-        body: { p_modules: selected, p_after_created: afterCreated, p_after_id: afterId, p_limit: 250 }
-      });
-      if (sequence !== excelExportSequence || !isActiveAdmin() || state.user.id !== userId) return;
-      if (!Array.isArray(page) || page.length > 250) throw new Error('La base de datos devolvió una respuesta de exportación no válida.');
-      records.push(...page);
-      if (page.length < 250) break;
-      const last = page[page.length - 1];
-      if (!last.created_at || !last.id || (last.created_at === afterCreated && last.id === afterId)) {
-        throw new Error('No se pudo continuar la consulta de exportación.');
-      }
-      afterCreated = last.created_at;
-      afterId = last.id;
-    }
+    const records = await fetchExcelRecords(selected, () =>
+      sequence === excelExportSequence && isActiveAdmin() && state.user.id === userId);
+    if (!records) return;
     status.textContent = 'Preparando el archivo Excel…';
     const result = await ExcelExport.createWorkbook(records, selected, filters, modules, { childSchemas, qualityForms }, window.ExcelJS);
     if (sequence !== excelExportSequence || !isActiveAdmin() || state.user.id !== userId) return;
@@ -5918,6 +5967,7 @@ function visibleLocalRecords(records) {
 }
 $('#climate-chart-filters').addEventListener('change', renderClimateChart);
 $('#excel-export-form').addEventListener('submit', event => { void downloadAdminExcel(event); });
+$('#excel-options-retry').addEventListener('click', () => { void loadExcelFilterOptions(); });
 $('#climate-chart-refresh').addEventListener('click', () => { void loadClimateChart(); });
 function selectClimateReading(event) {
   const target = event.target.closest('[data-climate-reading]');

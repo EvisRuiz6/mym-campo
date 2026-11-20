@@ -298,11 +298,13 @@
             <div class="flight-variation-filters">
               <div class="field"><label class="field-label" for="excel-from">Desde</label><input id="excel-from" class="text-input" type="date"></div>
               <div class="field"><label class="field-label" for="excel-to">Hasta</label><input id="excel-to" class="text-input" type="date"></div>
-              <div class="field"><label class="field-label" for="excel-farm">Finca</label><input id="excel-farm" class="text-input" placeholder="Nombre exacto"></div>
-              <div class="field"><label class="field-label" for="excel-zone">Zona</label><input id="excel-zone" class="text-input" placeholder="Zona exacta"></div>
-              <div class="field"><label class="field-label" for="excel-labor">Labor</label><input id="excel-labor" class="text-input" placeholder="Labor exacta"></div>
-              <div class="field"><label class="field-label" for="excel-owner">Usuario</label><input id="excel-owner" class="text-input" placeholder="Nombre de usuario exacto"></div>
+              <div class="field"><label class="field-label" for="excel-farm">Finca</label><select id="excel-farm" class="select-input"><option value="">Todas las fincas</option></select></div>
+              <div class="field"><label class="field-label" for="excel-zone">Zona</label><select id="excel-zone" class="select-input"><option value="">Todas las zonas</option></select></div>
+              <div class="field"><label class="field-label" for="excel-labor">Labor</label><select id="excel-labor" class="select-input"><option value="">Todas las labores</option></select></div>
+              <div class="field"><label class="field-label" for="excel-owner">Usuario</label><select id="excel-owner" class="select-input"><option value="">Todos los usuarios</option></select></div>
             </div>
+            <p id="excel-options-status" class="field-hint" role="status" aria-live="polite"></p>
+            <button id="excel-options-retry" class="secondary-button" type="button" hidden>Reintentar opciones</button>
             <p class="field-hint">Los filtros de texto no distinguen mayúsculas ni acentos. Las capturas sin el dato filtrado no se incluyen. Se exportan nombres y metadatos de los adjuntos, no las imágenes.</p>
             <button id="excel-export-submit" class="primary-button" type="submit">Descargar Excel</button>
             <p id="excel-export-status" class="field-hint excel-export-status" role="status" aria-live="polite"></p>
@@ -439,7 +441,7 @@
   </div>
   <script src="config.js"></script>
   <script src="vendor/exceljs-4.4.0.min.js"></script>
-  <script src="excel-export.js?v=1"></script>
-  <script src="app.js?v=58"></script>
+  <script src="excel-export.js?v=2"></script>
+  <script src="app.js?v=59"></script>
 </body>
 </html>

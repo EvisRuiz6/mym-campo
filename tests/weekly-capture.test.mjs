@@ -97,7 +97,7 @@ test('loads visit numbers together with their records for the weekly schedule', 
   const loadStart = source.indexOf('async function fetchAllLotFollowupVisits() {');
   const loadEnd = source.indexOf('\nlet weeklyCapture = null;', loadStart);
   assert.ok(loadStart >= 0 && loadEnd > loadStart);
-  const state = { configured: true, user: { id: 'user' }, lotFollowupLoadPromise: null };
+  const state = { configured: true, user: { id: 'user', status: 'active' }, lotFollowupLoadPromise: null };
   const visits = [{ record_id: 'r1', lot_code: '0000017', visit_date: '2026-03-01', cycle_date: '2026-01-01', visit_number: 3 }];
   const { loadLotFollowup } = runInNewContext(source.slice(loadStart, loadEnd) + '\n({ loadLotFollowup })', {
     state, navigator: { onLine: true }, canAccessLotFollowup: () => true,
@@ -107,7 +107,10 @@ test('loads visit numbers together with their records for the weekly schedule', 
       assert.match(path, /^rpc\/get_lot_followup_visits_with_links\?/);
       return visits;
     },
-    renderLotFollowupLotOptions: () => {}, renderLotFollowup: () => {}
+    renderLotFollowupLotOptions: () => {}, renderLotFollowup: () => {},
+    offlineSnapshotKey: () => 'user', sameOfflineScope: () => true,
+    putOfflineSnapshot: async () => {}, getOfflineSnapshot: async () => null,
+    offlineSnapshotDate: () => 'ahora'
   });
   await loadLotFollowup();
   assert.equal(state.lotFollowupVisits[0].visit_number, 3);

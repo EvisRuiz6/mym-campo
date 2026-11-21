@@ -1,5 +1,5 @@
 const DB_NAME = 'mym-campo-local';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 const SESSION_KEY = 'mym-campo-auth-session';
 const PROFILE_KEY = 'mym-campo-auth-profile';
 const INVITE_PENDING_KEY = 'mym-campo-invite-pending';
@@ -473,6 +473,7 @@ function openDb() {
       if (!db.objectStoreNames.contains('records')) db.createObjectStore('records', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('users')) db.createObjectStore('users', { keyPath: 'username' });
       if (!db.objectStoreNames.contains('weekly-visit-drafts')) db.createObjectStore('weekly-visit-drafts', { keyPath: 'id' });
+      if (!db.objectStoreNames.contains('offline-snapshots')) db.createObjectStore('offline-snapshots', { keyPath: 'id' });
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -493,6 +494,27 @@ const putRecord = record => storeRequest('records', 'readwrite', store => store.
 const getWeeklyVisitDraft = id => storeRequest('weekly-visit-drafts', 'readonly', store => store.get(id));
 const putWeeklyVisitDraft = draft => storeRequest('weekly-visit-drafts', 'readwrite', store => store.put(draft));
 const deleteWeeklyVisitDraft = id => storeRequest('weekly-visit-drafts', 'readwrite', store => store.delete(id));
+function offlineSnapshotKey(type, user) {
+  const zones = [...(user.allowedZones || [])].map(normalizeZoneValue).sort();
+  return JSON.stringify([type, user.id, user.role, zones]);
+}
+const getOfflineSnapshot = id => storeRequest('offline-snapshots', 'readonly', store => store.get(id));
+function putOfflineSnapshot(snapshot) {
+  return new Promise((resolve, reject) => {
+    const tx = state.db.transaction('offline-snapshots', 'readwrite');
+    tx.objectStore('offline-snapshots').put(snapshot);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error || new Error('No se pudo guardar la copia sin conexión.'));
+    tx.onabort = () => reject(tx.error || new Error('Se canceló la copia sin conexión.'));
+  });
+}
+function sameOfflineScope(user) {
+  return !!state.user && state.user.status === 'active' &&
+    offlineSnapshotKey('scope', state.user) === offlineSnapshotKey('scope', user);
+}
+function offlineSnapshotDate(snapshot) {
+  return new Date(snapshot.savedAt).toLocaleString('es-GT');
+}
 function putRecords(records) {
   return new Promise((resolve, reject) => {
     const tx = state.db.transaction('records', 'readwrite');
@@ -530,9 +552,11 @@ async function apiRequest(path, options) {
     });
   } catch (error) {
     console.error('Falló la conexión con Supabase.', error);
-    throw new Error(navigator.onLine
+    const connectionError = new Error(navigator.onLine
       ? 'No se pudo conectar con el servicio. Verifica internet, la disponibilidad del servidor y CORS; vuelve a intentarlo.'
       : 'Sin conexión a internet. Conéctate y vuelve a intentarlo.');
+    connectionError.connectionFailure = true;
+    throw connectionError;
   }
   const text = await response.text();
   let result = null;
@@ -704,6 +728,8 @@ async function syncCloudRecords(importLegacy) {
     state.syncConnected = true;
     updateConnection();
     await refreshLists();
+    if (!$('#page-clima-grafica').hidden) void loadClimateChart();
+    if (!$('#page-variacion-vuelo').hidden) void loadFlightVariation();
     return { uploaded: outgoing.length, updated: activityLaborUpdates.length, downloaded: remote.length, deleted };
   } finally {
     state.syncBusy = false;
@@ -2234,9 +2260,9 @@ async function generateMalezasPdf(recordId) {
     if (state.visitMap && Array.isArray(state.visitMap.boundaries)) {
       boundaries = state.visitMap.boundaries;
     } else {
-      if (!state.configured) throw new Error('Configura el espacio compartido para cargar los límites protegidos.');
-      if (!navigator.onLine) throw new Error('Conéctate a internet o abre primero el mapa de muestreos para generar el reporte.');
-      boundaries = await loadVisitMapBoundaries();
+      const snapshot = await loadBoundariesForReport();
+      boundaries = snapshot.boundaries;
+      if (snapshot.savedAt) toast('Reporte con límites guardados el ' + offlineSnapshotDate(snapshot) + '.');
     }
     boundaries = boundaries.filter(boundary => userCanAccessZone(boundary.zone));
     printWindow.document.open();
@@ -2664,11 +2690,12 @@ async function loadClimateChart() {
   if (!state.user || state.user.status !== 'active') return;
   const user = { ...state.user };
   const sequence = ++state.climateLoadSeq;
+  let local = [];
   const button = $('#climate-chart-refresh');
   button.disabled = true;
   $('#climate-chart-status').textContent = 'Cargando mediciones…';
   try {
-    const local = (await getRecords()).filter(recordHasLotAccess);
+    local = (await getRecords()).filter(recordHasLotAccess);
     const offline = !navigator.onLine || !state.configured;
     const remote = [];
     if (!offline) {
@@ -2688,6 +2715,16 @@ async function loadClimateChart() {
     renderClimateChart();
   } catch (error) {
     if (sequence !== state.climateLoadSeq) return;
+    if (!state.user || state.user.id !== user.id || state.user.role !== user.role) return;
+    const cached = error.connectionFailure ? mergeScopedReportRecords([], local, user, true, 'clima') : [];
+    if (cached.length) {
+      state.climateRecords = cached;
+      state.climateSource = 'No se pudo actualizar: se muestran datos guardados en este dispositivo, que pueden estar desactualizados.';
+      updateClimateOptions();
+      renderClimateChart();
+      console.error('No se pudieron actualizar las mediciones de clima.', error);
+      return;
+    }
     state.climateRecords = [];
     state.climateSource = '';
     updateClimateOptions();
@@ -2823,11 +2860,12 @@ async function loadFlightVariation() {
   if (!state.user || state.user.status !== 'active') return;
   const user = { ...state.user };
   const sequence = ++state.flightVariationLoadSeq;
+  let local = [];
   const button = $('#flight-variation-refresh');
   button.disabled = true;
   $('#flight-variation-status').textContent = 'Cargando vuelos…';
   try {
-    const local = (await getRecords()).filter(recordHasLotAccess);
+    local = (await getRecords()).filter(recordHasLotAccess);
     const offline = !navigator.onLine || !state.configured;
     const remote = [];
     if (!offline) {
@@ -2848,6 +2886,16 @@ async function loadFlightVariation() {
     renderFlightVariation();
   } catch (error) {
     if (sequence !== state.flightVariationLoadSeq) return;
+    if (!state.user || state.user.id !== user.id || state.user.role !== user.role) return;
+    const cached = error.connectionFailure ? mergeScopedReportRecords([], local, user, true) : [];
+    if (cached.length) {
+      state.flightVariationRecords = cached;
+      state.flightVariationSource = 'No se pudo actualizar: se muestran datos guardados en este dispositivo, que pueden estar desactualizados.';
+      updateFlightVariationOptions();
+      renderFlightVariation();
+      console.error('No se pudieron actualizar los vuelos para la gráfica.', error);
+      return;
+    }
     state.flightVariationRecords = [];
     state.flightVariationSource = '';
     updateFlightVariationOptions();
@@ -3781,6 +3829,33 @@ async function loadVisitMapBoundaries() {
     if (page.length < 1000) return boundaries;
   }
 }
+async function loadBoundariesForReport() {
+  const user = { ...state.user, allowedZones: [...(state.user.allowedZones || [])] };
+  const key = offlineSnapshotKey('boundaries', user);
+  if (state.configured && navigator.onLine) {
+    try {
+      const boundaries = await loadVisitMapBoundaries();
+      if (!sameOfflineScope(user)) throw new Error('Cambió la cuenta o sus permisos durante la consulta.');
+      try {
+        await putOfflineSnapshot({ id: key, savedAt: new Date().toISOString(), boundaries });
+      } catch (error) {
+        console.error('No se pudieron guardar los límites para uso sin conexión.', error);
+        toast('Mapa cargado, pero no se pudo guardar una copia para uso sin conexión.');
+      }
+      if (!sameOfflineScope(user)) throw new Error('Cambió la cuenta o sus permisos durante la consulta.');
+      return { boundaries, savedAt: null };
+    } catch (error) {
+      if (!sameOfflineScope(user) || !error.connectionFailure) throw error;
+      console.warn('No se pudieron actualizar los límites del mapa.', error);
+    }
+  }
+  const snapshot = await getOfflineSnapshot(key);
+  if (!sameOfflineScope(user)) throw new Error('Cambió la cuenta o sus permisos durante la consulta.');
+  if (!snapshot || !Array.isArray(snapshot.boundaries) || !snapshot.savedAt) {
+    throw new Error('No hay límites guardados para esta cuenta. Conéctate y abre el mapa primero.');
+  }
+  return { boundaries: snapshot.boundaries, savedAt: snapshot.savedAt };
+}
 function selectVisitMapLot(lotCode) {
   const map = state.visitMap;
   const lot = map && map.lots.get(lotCode);
@@ -3821,14 +3896,14 @@ async function openVisitMap() {
   $('#visit-map-stage').innerHTML = '';
   $('#visit-map-legend').hidden = true;
   try {
-    if (!state.configured) throw new Error('Configura el espacio compartido para cargar los límites protegidos.');
-    if (!navigator.onLine) throw new Error('Conéctate a internet para cargar los límites protegidos.');
-    const [boundaries, records] = await Promise.all([loadVisitMapBoundaries(), getRecords()]);
+    const [snapshot, records] = await Promise.all([loadBoundariesForReport(), getRecords()]);
     if (!state.user || !['admin', 'supervisor'].includes(state.user.role)) {
       throw new Error('Tu perfil ya no tiene acceso al mapa de muestreos.');
     }
     const visibleRecords = visibleLocalRecords(records).filter(record => record.tipo === 'malezas');
-    renderVisitMap(boundaries, visitStatsByLot(visibleRecords));
+    renderVisitMap(snapshot.boundaries, visitStatsByLot(visibleRecords));
+    if (snapshot.savedAt) $('#visit-map-status').textContent +=
+      ' Límites guardados el ' + offlineSnapshotDate(snapshot) + '; pueden estar desactualizados.';
   } catch (error) {
     console.error('No se pudo cargar el mapa de muestreos.', error);
     state.visitMap = null;
@@ -4491,28 +4566,55 @@ async function fetchAllLotFollowupVisits() {
 }
 async function loadLotFollowup() {
   if (!canAccessLotFollowup()) return;
-  if (!state.configured) {
-    setLotFollowupStatus('Configura Supabase y aplica las migraciones de seguimiento para usar este módulo.', 'warning');
-    return;
-  }
-  if (!navigator.onLine) {
-    setLotFollowupStatus('Conéctate a internet para consultar los planes y las visitas compartidas.', 'warning');
-    return;
-  }
   if (state.lotFollowupLoadPromise) return state.lotFollowupLoadPromise;
-  const userId = state.user.id;
+  const user = { ...state.user, allowedZones: [...(state.user.allowedZones || [])] };
+  const key = offlineSnapshotKey('lot-followup', user);
   const request = (async () => {
     setLotFollowupStatus('Consultando planes y visitas…', 'info');
-    await loadLotLookup();
-    const [plans, visits] = await Promise.all([
-      fetchAllLotFollowupPlans(),
-      fetchAllLotFollowupVisits()
-    ]);
-    if (!state.user || state.user.id !== userId) return;
-    state.lotFollowupPlans = plans;
-    state.lotFollowupVisits = visits;
+    let snapshot;
+    let saveWarning = false;
+    if (state.configured && navigator.onLine) {
+      try {
+        await loadLotLookup();
+        const [plans, visits] = await Promise.all([
+          fetchAllLotFollowupPlans(),
+          fetchAllLotFollowupVisits()
+        ]);
+        if (!sameOfflineScope(user)) return;
+        snapshot = { id: key, savedAt: new Date().toISOString(), plans, visits };
+        try { await putOfflineSnapshot(snapshot); }
+        catch (error) {
+          saveWarning = true;
+          console.error('No se pudo guardar el seguimiento para uso sin conexión.', error);
+        }
+      } catch (error) {
+        if (!sameOfflineScope(user)) return;
+        if (!error.connectionFailure) {
+          state.lotFollowupPlans = [];
+          state.lotFollowupVisits = [];
+          renderLotFollowupLotOptions();
+          renderLotFollowup();
+          throw error;
+        }
+        console.warn('No se pudo actualizar el seguimiento compartido.', error);
+      }
+    }
+    if (!snapshot) snapshot = await getOfflineSnapshot(key);
+    if (!sameOfflineScope(user)) return;
+    if (!snapshot || !Array.isArray(snapshot.plans) || !Array.isArray(snapshot.visits) || !snapshot.savedAt) {
+      state.lotFollowupPlans = [];
+      state.lotFollowupVisits = [];
+      renderLotFollowupLotOptions();
+      renderLotFollowup();
+      throw new Error('No hay seguimiento guardado para esta cuenta. Conéctate y actualiza la programación.');
+    }
+    state.lotFollowupPlans = snapshot.plans;
+    state.lotFollowupVisits = snapshot.visits;
     renderLotFollowupLotOptions();
     renderLotFollowup();
+    setLotFollowupStatus(saveWarning
+      ? 'Seguimiento actualizado, pero no se pudo guardar una copia sin conexión.'
+      : 'Datos consultados el ' + offlineSnapshotDate(snapshot) + '. Pueden cambiar al sincronizar.', saveWarning ? 'warning' : 'info');
   })();
   state.lotFollowupLoadPromise = request;
   try {
@@ -5145,7 +5247,7 @@ function navigate(page) {
   if (page === 'variacion-vuelo') void loadFlightVariation();
   if (page === 'clima-grafica') void loadClimateChart();
   if (page === 'seguimiento-lotes' || page === 'programacion-semanal') {
-    loadLotFollowup().catch(error => console.error('No se pudo actualizar el seguimiento de lotes.', error));
+    loadLotFollowup().catch(handleLotFollowupError);
   }
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -6090,12 +6192,16 @@ window.addEventListener('online', () => {
   updateConnection();
   syncCloudRecords(false).catch(handleCloudError);
   if (state.user && (!$('#page-seguimiento-lotes').hidden || !$('#page-programacion-semanal').hidden)) loadLotFollowup().catch(handleLotFollowupError);
+  if (state.user && !$('#page-clima-grafica').hidden) void loadClimateChart();
+  if (state.user && !$('#page-variacion-vuelo').hidden) void loadFlightVariation();
 });
 window.addEventListener('offline', () => {
   updateConnection();
   if (!$('#page-seguimiento-lotes').hidden || !$('#page-programacion-semanal').hidden) {
-    setLotFollowupStatus('Sin conexión. El seguimiento compartido y sus cambios requieren conexión a internet.', 'warning');
+    loadLotFollowup().catch(handleLotFollowupError);
   }
+  if (state.user && !$('#page-clima-grafica').hidden) void loadClimateChart();
+  if (state.user && !$('#page-variacion-vuelo').hidden) void loadFlightVariation();
 });
 async function init() {
   try {

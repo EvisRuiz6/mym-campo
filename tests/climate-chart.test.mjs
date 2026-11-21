@@ -121,6 +121,22 @@ test('clears stale climate results and provides retry guidance on server failure
   assert.equal(controls['#climate-chart-refresh'].disabled, false);
 });
 
+test('shows only permitted cached readings when the network request fails', async () => {
+  const controls = { '#climate-chart-refresh': {}, '#climate-chart-status': {} };
+  const state = { user, configured: true, climateLoadSeq: 0 };
+  const load = runInNewContext(extract('async function loadClimateChart()', '\nfunction mergeScopedReportRecords(') + '\nloadClimateChart', {
+    state, $: selector => controls[selector], navigator: { onLine: true },
+    getRecords: async () => [record('own', 'one', {}), record('other', 'two', {})],
+    recordHasLotAccess: () => true,
+    cloudRequest: async () => { throw Object.assign(new Error('red'), { connectionFailure: true }); },
+    mapCloudRecord: row => row, mergeScopedReportRecords: merge,
+    updateClimateOptions() {}, renderClimateChart() {}, console: { error() {} }
+  });
+  await load();
+  assert.deepEqual(plain(state.climateRecords.map(row => row.id)), ['own']);
+  assert.match(state.climateSource, /desactualizados/);
+});
+
 test('ignores a response after the session changes', async () => {
   const controls = { '#climate-chart-refresh': {}, '#climate-chart-status': {} };
   const state = { user: admin, configured: true, climateLoadSeq: 0, climateRecords: [] };

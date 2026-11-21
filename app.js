@@ -1,5 +1,5 @@
 const DB_NAME = 'mym-campo-local';
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 const SESSION_KEY = 'mym-campo-auth-session';
 const PROFILE_KEY = 'mym-campo-auth-profile';
 const INVITE_PENDING_KEY = 'mym-campo-invite-pending';
@@ -474,6 +474,7 @@ function openDb() {
       if (!db.objectStoreNames.contains('users')) db.createObjectStore('users', { keyPath: 'username' });
       if (!db.objectStoreNames.contains('weekly-visit-drafts')) db.createObjectStore('weekly-visit-drafts', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('offline-snapshots')) db.createObjectStore('offline-snapshots', { keyPath: 'id' });
+      if (!db.objectStoreNames.contains('weekly-visit-outbox')) db.createObjectStore('weekly-visit-outbox', { keyPath: 'id' });
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -492,8 +493,46 @@ const getRecords = () => storeRequest('records', 'readonly', store => store.getA
 const getRecord = id => storeRequest('records', 'readonly', store => store.get(id));
 const putRecord = record => storeRequest('records', 'readwrite', store => store.put(record));
 const getWeeklyVisitDraft = id => storeRequest('weekly-visit-drafts', 'readonly', store => store.get(id));
-const putWeeklyVisitDraft = draft => storeRequest('weekly-visit-drafts', 'readwrite', store => store.put(draft));
+function putWeeklyVisitDraft(draft) {
+  return new Promise((resolve, reject) => {
+    const tx = state.db.transaction('weekly-visit-drafts', 'readwrite');
+    tx.objectStore('weekly-visit-drafts').put(draft);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error || new Error('No se pudo guardar el borrador.'));
+    tx.onabort = () => reject(tx.error || new Error('Se canceló el guardado del borrador.'));
+  });
+}
 const deleteWeeklyVisitDraft = id => storeRequest('weekly-visit-drafts', 'readwrite', store => store.delete(id));
+const getWeeklyVisitOutbox = () => storeRequest('weekly-visit-outbox', 'readonly', store => store.getAll());
+function writeWeeklyVisitOutbox(group, operation) {
+  return new Promise((resolve, reject) => {
+    const tx = state.db.transaction(operation === 'delete'
+      ? ['weekly-visit-outbox', 'weekly-visit-drafts'] : 'weekly-visit-outbox', 'readwrite');
+    const store = tx.objectStore('weekly-visit-outbox');
+    let abortMessage = '';
+    if (operation === 'add') store.add(group);
+    else if (operation === 'delete') {
+      store.delete(group.id);
+      tx.objectStore('weekly-visit-drafts').delete(group.id);
+    }
+    else if (operation === 'replace-conflict') {
+      const request = store.get(group.id);
+      request.onsuccess = () => {
+        const previous = request.result;
+        if (!previous || previous.userId !== group.userId || previous.status !== 'conflict') {
+          abortMessage = 'El grupo cambió; actualiza Pendientes antes de guardar.';
+          tx.abort();
+          return;
+        }
+        store.put(group);
+      };
+    }
+    else store.put(group);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error || new Error('No se pudo guardar la cola de visitas.'));
+    tx.onabort = () => reject(new Error(abortMessage || (tx.error && tx.error.message) || 'Se canceló la actualización de la cola de visitas.'));
+  });
+}
 function offlineSnapshotKey(type, user) {
   const zones = [...(user.allowedZones || [])].map(normalizeZoneValue).sort();
   return JSON.stringify([type, user.id, user.role, zones]);
@@ -524,6 +563,139 @@ function putRecords(records) {
     tx.onerror = () => reject(tx.error || new Error('No se pudieron actualizar los registros locales.'));
     tx.onabort = () => reject(tx.error || new Error('La actualización local de registros fue cancelada.'));
   });
+}
+function reconcileCloudRecords(remote, user, visibleIds, snapshot) {
+  return new Promise((resolve, reject) => {
+    const tx = state.db.transaction(snapshot ? ['records', 'offline-snapshots'] : 'records', 'readwrite');
+    const store = tx.objectStore('records');
+    const request = store.getAll();
+    let needsFullSync = false;
+    request.onsuccess = () => {
+      if (!sameOfflineScope(user)) {
+        tx.abort();
+        return;
+      }
+      const local = request.result;
+      const localById = new Map(local.map(record => [record.id, record]));
+      const remoteIds = new Set(visibleIds || remote.map(record => record.id));
+      const changedIds = new Set(remote.map(record => record.id));
+      const previousIds = new Set(snapshot && snapshot.previousIds || []);
+      if (snapshot && [...remoteIds].some(id =>
+        (!localById.has(id) || (!snapshot.full && !previousIds.has(id))) && !changedIds.has(id))) {
+        needsFullSync = true;
+        tx.abort();
+        return;
+      }
+      for (const record of local) {
+        if (record.syncStatus === 'synced' && !remoteIds.has(record.id) &&
+          (record.ownerId === user.id || (!record.ownerId && record.ownerUsername === user.username) ||
+            ['admin', 'supervisor'].includes(user.role))) {
+          store.delete(record.id);
+        }
+      }
+      for (const record of remote) {
+        const existing = localById.get(record.id);
+        if (existing && existing.syncStatus !== 'synced') continue;
+        if (!existing || JSON.stringify(existing) !== JSON.stringify(record)) store.put(record);
+      }
+      if (snapshot) tx.objectStore('offline-snapshots').put({
+        id: snapshot.id, cursor: snapshot.cursor, knownIds: [...remoteIds], savedAt: new Date().toISOString()
+      });
+    };
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error || new Error('No se pudieron actualizar los registros locales.'));
+    tx.onabort = () => {
+      const error = needsFullSync ? new Error('La copia local necesita una actualización completa.')
+        : tx.error || new Error('La actualización local de registros fue cancelada.');
+      if (needsFullSync) error.needsFullSync = true;
+      reject(error);
+    };
+  });
+}
+function validSyncCursor(value) {
+  if (typeof value !== 'string' || value.length > 1000000) return false;
+  const match = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\|(\d{1,19}):(\d{1,19}):(\d{1,19}(?:,\d{1,19})*)?$/.exec(value);
+  if (!match) return false;
+  const xmin = BigInt(match[2]), xmax = BigInt(match[3]), limit = BigInt('9223372036854775807');
+  if (xmin > xmax || xmax > limit) return false;
+  let previous = xmin - 1n;
+  for (const xid of match[4] ? match[4].split(',') : []) {
+    const current = BigInt(xid);
+    if (current <= previous || current >= xmax) return false;
+    previous = current;
+  }
+  return true;
+}
+async function fetchCloudRecordDelta(cursor) {
+  const result = await cloudRequest('rpc/get_field_record_sync', {
+    method: 'POST', body: { p_after: cursor }
+  });
+  if (!result || !validSyncCursor(result.cursor) || typeof result.full !== 'boolean' ||
+      !Array.isArray(result.ids) || !Array.isArray(result.records) ||
+      result.ids.some(id => typeof id !== 'string') || new Set(result.ids).size !== result.ids.length ||
+      (cursor === null && !result.full) ||
+      (!result.full && (!validSyncCursor(cursor) ||
+        result.cursor.split('|')[0] !== cursor.split('|')[0] ||
+        BigInt(result.cursor.split('|')[1].split(':')[1]) < BigInt(cursor.split('|')[1].split(':')[1])))) {
+    throw new Error('La respuesta de sincronización no es válida.');
+  }
+  const ids = new Set(result.ids);
+  const changed = new Set();
+  for (const row of result.records) {
+    if (!row || typeof row.id !== 'string' || typeof row.owner_id !== 'string' ||
+        typeof row.tipo !== 'string' || typeof row.created_at !== 'string' ||
+        !row.datos || typeof row.datos !== 'object' || Array.isArray(row.datos) ||
+        !ids.has(row.id) || changed.has(row.id)) {
+      throw new Error('La respuesta de sincronización contiene registros inconsistentes.');
+    }
+    changed.add(row.id);
+  }
+  if (result.full && changed.size !== ids.size) {
+    throw new Error('La respuesta de sincronización completa está incompleta.');
+  }
+  return result;
+}
+function acknowledgeUploadedRecord(original) {
+  return new Promise((resolve, reject) => {
+    const tx = state.db.transaction('records', 'readwrite');
+    const store = tx.objectStore('records');
+    const request = store.get(original.id);
+    let needsSync = false;
+    request.onsuccess = () => {
+      const current = request.result;
+      if (!current) {
+        store.put({ ...original, syncStatus: 'delete-pending' });
+        needsSync = true;
+      } else if (current.ownerId && original.ownerId
+        ? current.ownerId !== original.ownerId
+        : current.ownerUsername !== original.ownerUsername) {
+        return;
+      } else if (JSON.stringify(current) === JSON.stringify(original)) {
+        const synced = { ...current, syncStatus: 'synced' };
+        delete synced.syncOrigin;
+        if (original.syncOrigin === 'activity-update') {
+          synced.reviewStatus = 'pending';
+          synced.reviewedBy = null;
+          synced.reviewedAt = null;
+          synced.reviewNote = null;
+        }
+        store.put(synced);
+      } else {
+        if (current.syncStatus === 'pending' && original.syncOrigin !== 'activity-update') {
+          store.put({ ...current, syncOrigin: 'activity-update' });
+        }
+        needsSync = current.syncStatus === 'pending' || current.syncStatus === 'delete-pending';
+      }
+    };
+    tx.oncomplete = () => resolve(needsSync);
+    tx.onerror = () => reject(tx.error || new Error('No se pudo confirmar la captura en este dispositivo.'));
+    tx.onabort = () => reject(tx.error || new Error('Se canceló la confirmación de la captura.'));
+  });
+}
+function canonicalJson(value) {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonicalJson(value[key])]));
 }
 const deleteRecord = id => storeRequest('records', 'readwrite', store => store.delete(id));
 function supabaseConfig() {
@@ -565,10 +737,14 @@ async function apiRequest(path, options) {
     catch { throw new Error('Supabase devolvió una respuesta no válida.'); }
   }
   if (!response.ok) {
-    if (response.status === 401 && !path.startsWith('/auth/')) throw new Error('La sesión no es válida o expiró. Vuelve a iniciar sesión.');
-    if (response.status === 403) throw new Error('La cuenta no tiene permisos para esta operación.');
-    if (response.status === 404 && path.startsWith('/functions/v1/')) throw new Error('El servicio de usuarios no está desplegado. Contacta al administrador del sistema.');
-    throw new Error(result && (result.msg || result.message || result.error_description || result.hint) || 'La solicitud al espacio compartido falló (' + response.status + ').');
+    let message = result && (result.msg || result.message || result.error_description || result.hint) ||
+      'La solicitud al espacio compartido falló (' + response.status + ').';
+    if (response.status === 401 && !path.startsWith('/auth/')) message = 'La sesión no es válida o expiró. Vuelve a iniciar sesión.';
+    if (response.status === 403) message = 'La cuenta no tiene permisos para esta operación.';
+    if (response.status === 404 && path.startsWith('/functions/v1/')) message = 'El servicio de usuarios no está desplegado. Contacta al administrador del sistema.';
+    const error = new Error(message);
+    error.httpStatus = response.status;
+    throw error;
   }
   return result;
 }
@@ -631,6 +807,40 @@ function mapCloudRecord(row) {
     reviewedBy: row.reviewed_by, reviewedAt: row.reviewed_at, reviewNote: row.review_note
   };
 }
+async function syncWeeklyVisitOutbox(user) {
+  const groups = (await getWeeklyVisitOutbox()).filter(group => group.userId === user.id && group.status === 'pending');
+  let uploaded = 0;
+  let conflicts = 0;
+  for (const group of groups) {
+    if (!sameOfflineScope(user)) throw new Error('Cambió la cuenta o sus permisos durante la sincronización.');
+    if (group.scope !== offlineSnapshotKey('scope', user)) {
+      group.status = 'conflict';
+      group.error = 'Cambió el perfil o las zonas autorizadas. Revisa esta visita antes de reintentar.';
+      await writeWeeklyVisitOutbox(group, 'put');
+      conflicts++;
+      continue;
+    }
+    try {
+      const saved = await cloudRequest('rpc/save_lot_visit_captures', {
+        method: 'POST', body: { p_captures: group.captures }
+      });
+      if (!sameOfflineScope(user)) throw new Error('Cambió la cuenta o sus permisos durante la sincronización.');
+      if (!Array.isArray(saved) || saved.length !== group.captures.length ||
+          saved.some((id, index) => id !== group.captures[index].record_id)) {
+        throw new Error('La respuesta del servidor no confirma todas las visitas del grupo.');
+      }
+      await writeWeeklyVisitOutbox(group, 'delete');
+      uploaded += group.captures.length;
+    } catch (error) {
+      if (!sameOfflineScope(user) || error.connectionFailure || error.httpStatus >= 500 || !error.httpStatus) throw error;
+      group.status = 'conflict';
+      group.error = error.message || 'El servidor rechazó el grupo de visitas.';
+      await writeWeeklyVisitOutbox(group, 'put');
+      conflicts++;
+    }
+  }
+  return { uploaded, conflicts };
+}
 async function syncCloudRecords(importLegacy) {
   if (!state.configured || !state.user) {
     if (importLegacy) throw new Error('Configura el espacio compartido e inicia sesión antes de importar.');
@@ -652,14 +862,24 @@ async function syncCloudRecords(importLegacy) {
   }
   state.syncBusy = true;
   state.syncRequested = false;
+  const syncUser = { ...state.user, allowedZones: [...(state.user.allowedZones || [])] };
   try {
+    const profile = await fetchProfile(syncUser.id);
+    if (!sameOfflineScope(syncUser)) throw new Error('Cambió la cuenta o sus permisos durante la sincronización.');
+    if (profile.status !== syncUser.status || profile.username !== syncUser.username ||
+        offlineSnapshotKey('scope', profile) !== offlineSnapshotKey('scope', syncUser)) {
+      await startSession(profile, state.authSession);
+      throw new Error('Cambió el perfil o sus permisos. Se actualizó el acceso de esta cuenta.');
+    }
+    const weeklyResult = await syncWeeklyVisitOutbox(syncUser);
     let records = await getRecords();
     let deleted = 0;
     const queuedDeletions = records.filter(record =>
       record.syncStatus === 'delete-pending' &&
-      (record.ownerUsername === state.user.username || isActiveAdmin())
+      (record.ownerId === syncUser.id || (!record.ownerId && record.ownerUsername === syncUser.username) || isActiveAdmin())
     );
     for (const record of queuedDeletions) {
+      if (!sameOfflineScope(syncUser)) throw new Error('Cambió la cuenta o sus permisos durante la sincronización.');
       await cloudRequest('rpc/delete_field_record', {
         method: 'POST',
         body: { p_record_id: record.id }
@@ -670,67 +890,79 @@ async function syncCloudRecords(importLegacy) {
     records = records.filter(record => record.syncStatus !== 'delete-pending');
     const outgoing = records.filter(record =>
       record.syncStatus === 'pending' &&
-      record.ownerUsername === state.user.username &&
+      (record.ownerId === syncUser.id || (!record.ownerId && record.ownerUsername === syncUser.username)) &&
       (record.syncOrigin === 'new' || (importLegacy && !record.syncOrigin))
     );
     for (const record of outgoing) {
-      await cloudRequest('field_records?on_conflict=id', {
+      if (!sameOfflineScope(syncUser)) throw new Error('Cambió la cuenta o sus permisos durante la sincronización.');
+      const inserted = await cloudRequest('field_records?on_conflict=id', {
         method: 'POST',
-        headers: { Prefer: 'resolution=ignore-duplicates,return=minimal' },
+        headers: { Prefer: 'resolution=ignore-duplicates,return=representation' },
         body: {
           id: record.id,
-          owner_id: state.user.id,
+          owner_id: syncUser.id,
           tipo: record.tipo,
           schema_version: record.schemaVersion || 1,
           datos: record.datos
         }
       });
-      delete record.syncOrigin;
-      record.syncStatus = 'synced';
-      await putRecord(record);
+      if (!Array.isArray(inserted)) throw new Error('No se pudo confirmar la captura enviada.');
+      if (!inserted.length) {
+        if (!sameOfflineScope(syncUser)) throw new Error('Cambió la cuenta o sus permisos durante la sincronización.');
+        const existing = await cloudRequest('field_records?select=id,owner_id,tipo,datos&id=eq.' + encodeURIComponent(record.id) + '&limit=1');
+        if (!Array.isArray(existing) || existing.length !== 1 || existing[0].owner_id !== syncUser.id ||
+          existing[0].tipo !== record.tipo ||
+          JSON.stringify(canonicalJson(existing[0].datos)) !== JSON.stringify(canonicalJson(record.datos))) {
+          throw new Error('La captura pendiente coincide con un registro diferente en el servidor. Revísala antes de sincronizar.');
+        }
+      }
+      if (await acknowledgeUploadedRecord(record)) state.syncRequested = true;
     }
 
     const activityLaborUpdates = records.filter(record =>
       record.syncStatus === 'pending' &&
       record.syncOrigin === 'activity-update' &&
-      (record.ownerUsername === state.user.username || isActiveAdmin())
+      (record.ownerId === syncUser.id || (!record.ownerId && record.ownerUsername === syncUser.username) || isActiveAdmin())
     );
     for (const record of activityLaborUpdates) {
+      if (!sameOfflineScope(syncUser)) throw new Error('Cambió la cuenta o sus permisos durante la sincronización.');
       await cloudRequest('rpc/update_field_record', {
         method: 'POST',
         body: { p_record_id: record.id, p_schema_version: record.schemaVersion || 1, p_datos: record.datos }
       });
-      delete record.syncOrigin;
-      record.syncStatus = 'synced';
-      record.reviewStatus = 'pending';
-      record.reviewedBy = null;
-      record.reviewedAt = null;
-      record.reviewNote = null;
-      await putRecord(record);
+      if (await acknowledgeUploadedRecord(record)) state.syncRequested = true;
     }
 
-    const remote = [];
-    for (let offset = 0, page; ; offset += 1000) {
-      page = await cloudRequest(
-        'field_records?select=id,owner_id,tipo,created_at,schema_version,datos,review_status,reviewed_by,reviewed_at,review_note,profiles!field_records_owner_id_fkey(username,display_name)&order=created_at.desc&limit=1000&offset=' + offset
-      );
-      remote.push(...page);
-      if (page.length < 1000) break;
+    const snapshotId = offlineSnapshotKey('record-sync', syncUser);
+    const previous = await getOfflineSnapshot(snapshotId);
+    let cursor = previous && validSyncCursor(previous.cursor) && Array.isArray(previous.knownIds) &&
+      previous.knownIds.every(id => typeof id === 'string') &&
+      new Set(previous.knownIds).size === previous.knownIds.length ? previous.cursor : null;
+    let delta = await fetchCloudRecordDelta(cursor);
+    try {
+      await reconcileCloudRecords(delta.records.map(mapCloudRecord), syncUser, delta.ids, {
+        id: snapshotId, cursor: delta.cursor, previousIds: previous && previous.knownIds || [], full: delta.full
+      });
+    } catch (error) {
+      if (!error.needsFullSync || cursor === null) throw error;
+      cursor = null;
+      delta = await fetchCloudRecordDelta(null);
+      await reconcileCloudRecords(delta.records.map(mapCloudRecord), syncUser, delta.ids, {
+        id: snapshotId, cursor: delta.cursor, previousIds: [], full: true
+      });
     }
-    const remoteIds = new Set(remote.map(row => row.id));
-    const staleLocalRecords = (await getRecords()).filter(record =>
-      record.syncStatus === 'synced' &&
-      !remoteIds.has(record.id) &&
-      (record.ownerUsername === state.user.username || ['admin', 'supervisor'].includes(state.user.role))
-    );
-    await Promise.all(staleLocalRecords.map(record => deleteRecord(record.id)));
-    await Promise.all(remote.map(row => putRecord(mapCloudRecord(row))));
     state.syncConnected = true;
     updateConnection();
     await refreshLists();
     if (!$('#page-clima-grafica').hidden) void loadClimateChart();
     if (!$('#page-variacion-vuelo').hidden) void loadFlightVariation();
-    return { uploaded: outgoing.length, updated: activityLaborUpdates.length, downloaded: remote.length, deleted };
+    if ((weeklyResult.uploaded || weeklyResult.conflicts) &&
+      (!$('#page-seguimiento-lotes').hidden || !$('#page-programacion-semanal').hidden)) {
+      loadLotFollowup().catch(handleLotFollowupError);
+    }
+    if (weeklyResult.conflicts) toast('Hay visitas con conflictos. Revísalas en Pendientes.');
+    return { uploaded: outgoing.length, updated: activityLaborUpdates.length, downloaded: delta.records.length, deleted,
+      weeklyUploaded: weeklyResult.uploaded, weeklyConflicts: weeklyResult.conflicts };
   } finally {
     state.syncBusy = false;
     const waiters = state.syncIdleWaiters.splice(0);
@@ -3183,6 +3415,7 @@ function parseLotFollowupRows(rows) {
         visitDates.push({ number: visitColumn.number, date: value });
       }
     }
+    if (visitDates.length > 5) errors.push('Fila ' + rowNumber + ': el ciclo admite como máximo cinco visitas programadas.');
     for (let index = 0; index < visitDates.length; index++) {
       if (cycleDate && visitDates[index].date < cycleDate) {
         errors.push('Fila ' + rowNumber + ': VISITA ' + visitDates[index].number + ' es anterior a la fecha de siembra/corte.');
@@ -3225,7 +3458,9 @@ function evaluateLotFollowup(plan, visits, today) {
     if (!uniqueVisits.has(key)) uniqueVisits.set(key, {
       record_id: recordId,
       visit_date: date,
-      visit_number: visit && visit.visit_number
+      visit_number: visit && visit.visit_number,
+      pending_sync: !!(visit && visit.pending_sync),
+      conflict: !!(visit && visit.conflict)
     });
   });
   const actualVisits = [...uniqueVisits.values()].sort((a, b) => a.visit_date.localeCompare(b.visit_date));
@@ -3253,10 +3488,12 @@ function evaluateLotFollowup(plan, visits, today) {
       number: index + 1,
       due_date: dueDate,
       visit_date: actual && actual.visit_date,
-      status: actual ? (actual.visit_date > dueDate ? 'Realizada tarde' : 'Realizada') : (dueDate < today ? 'Atrasada' : 'Pendiente')
+      pending_sync: !!(actual && actual.pending_sync),
+      status: actual && actual.pending_sync ? (actual.conflict ? 'Conflicto por revisar' : 'Pendiente de sincronizar')
+        : actual ? (actual.visit_date > dueDate ? 'Realizada tarde' : 'Realizada') : (dueDate < today ? 'Atrasada' : 'Pendiente')
     };
   });
-  const pendingCount = slots.filter(slot => !slot.visit_date).length;
+  const pendingCount = slots.filter(slot => !slot.visit_date || slot.pending_sync).length;
   const overdueCount = slots.filter(slot => slot.status === 'Atrasada').length;
   const fulfilled = requiredCount > 0 && pendingCount === 0;
   const statusKey = !requiredCount ? 'unscheduled' : fulfilled ? 'complete' : overdueCount ? 'overdue' : 'pending';
@@ -3339,7 +3576,7 @@ function buildLotWeeklyVisitItems(plans, visits, lotLookup, today) {
     if (!lotCode) continue;
     const summary = evaluateLotFollowup(plan, visits, today);
     const lot = lotLookup && lotLookup[lotCode] || {};
-    for (const slot of summary.slots.slice(0, 3)) {
+    for (const slot of summary.slots.slice(0, 5)) {
       if (slot.visit_date) continue;
       const key = lotCode + ':' + slot.number + ':' + slot.due_date;
       if (seen.has(key)) continue;
@@ -3453,7 +3690,8 @@ function lotWeeklyVisitGroupCard(group) {
       '<p><strong>' + esc(dayName.charAt(0).toLocaleUpperCase('es-GT') + dayName.slice(1)) +
         '</strong> · Fecha asignada: ' + esc(formatDate(group.assignedDate)) +
         ' · Visitas agrupadas: ' + group.visits.length + '</p></div>' +
-      '<button type="button" class="primary-button" data-weekly-capture-group="' +
+      '<button type="button" class="primary-button" data-weekly-capture-date="' + esc(group.assignedDate) +
+      '" data-weekly-capture-group="' +
       esc(JSON.stringify(captureVisits)) + '">Capturar visitas del día (' + group.visits.length + ')</button></div>' +
     '<div class="lot-weekly-program-table-wrap"><table class="lot-weekly-program-table">' +
       '<thead><tr><th>Lote</th><th>Visita</th><th>Fecha programada original</th><th>Responsable</th><th>Fecha asignada</th><th>Estado</th></tr></thead>' +
@@ -3600,12 +3838,16 @@ function visitStatsByLot(records) {
     for (const [code, sample] of recordLots) {
       const lotStats = stats.get(code) || {
         visits: 0,
+        pendingVisits: 0,
+        conflictVisits: 0,
         latestDate: '',
         latestSampleDate: '',
         latestControlPercent: null,
         owners: new Set()
       };
       lotStats.visits += 1;
+      if (record.syncStatus === 'pending') lotStats.pendingVisits += 1;
+      if (record.pendingConflict) lotStats.conflictVisits += 1;
       if (sample.date && sample.date > lotStats.latestDate) lotStats.latestDate = sample.date;
       if (!lotStats.latestSampleDate || sample.date >= lotStats.latestSampleDate) {
         lotStats.latestSampleDate = sample.date;
@@ -3799,6 +4041,7 @@ function renderVisitMap(boundaries, visits) {
     return stats && stats.latestControlPercent != null;
   }).length;
   const totalVisits = lots.reduce((total, lot) => total + (visits.get(lot.lot_code) ? visits.get(lot.lot_code).visits : 0), 0);
+  const pendingVisits = lots.reduce((total, lot) => total + (visits.get(lot.lot_code) ? visits.get(lot.lot_code).pendingVisits : 0), 0);
   const unmatchedVisits = [...visits.keys()].filter(code => !lotMetadata.has(code)).length;
   const validLotCodes = new Set(lots.map(lot => lot.lot_code));
   const reportBoundaries = boundaries.filter(boundary =>
@@ -3815,6 +4058,7 @@ function renderVisitMap(boundaries, visits) {
   const notices = [];
   if (skipped) notices.push(skipped + ' geometrías inválidas o fuera de zona se omitieron.');
   if (unmatchedVisits) notices.push(unmatchedVisits + ' lotes visitados no tienen geometría importada.');
+  if (pendingVisits) notices.push(pendingVisits + ' visita(s) mostradas están pendientes de sincronización o revisión.');
   $('#visit-map-status').textContent = (notices.length ? notices.join(' ') + ' ' : '') +
     'El color representa el % CONTROL del muestreo más reciente.';
 }
@@ -3864,6 +4108,8 @@ function selectVisitMapLot(lotCode) {
   const details = [lot.lot_code, lot.finca || 'Finca sin nombre', 'Zona ' + lot.zone];
   if (stats) {
     details.push(stats.visits + (stats.visits === 1 ? ' visita' : ' visitas'));
+    if (stats.pendingVisits) details.push(stats.pendingVisits + ' pendiente(s) de sincronizar');
+    if (stats.conflictVisits) details.push(stats.conflictVisits + ' conflicto(s) por revisar');
     details.push('Último muestreo: ' + (stats.latestDate ? formatDate(String(stats.latestDate).slice(0, 10)) : 'Sin fecha'));
     details.push('Control de maleza: ' + (stats.latestControlPercent == null
       ? 'Sin dato'
@@ -3888,6 +4134,7 @@ async function openVisitMap() {
     return;
   }
   if (!dialog.open) dialog.showModal();
+  const user = { ...state.user, allowedZones: [...(state.user.allowedZones || [])] };
   const button = $('#open-visit-map');
   button.disabled = true;
   $('#visit-map-summary').textContent = '';
@@ -3896,11 +4143,18 @@ async function openVisitMap() {
   $('#visit-map-stage').innerHTML = '';
   $('#visit-map-legend').hidden = true;
   try {
-    const [snapshot, records] = await Promise.all([loadBoundariesForReport(), getRecords()]);
-    if (!state.user || !['admin', 'supervisor'].includes(state.user.role)) {
+    const [snapshot, records, groups] = await Promise.all([loadBoundariesForReport(), getRecords(), getWeeklyVisitOutbox()]);
+    if (!sameOfflineScope(user) || !['admin', 'supervisor'].includes(state.user.role)) {
       throw new Error('Tu perfil ya no tiene acceso al mapa de muestreos.');
     }
-    const visibleRecords = visibleLocalRecords(records).filter(record => record.tipo === 'malezas');
+    const queued = groups.filter(canAccessWeeklyOutbox).flatMap(group => group.captures.map(capture => ({
+      id: capture.record_id, tipo: 'malezas', datos: capture.datos, createdAt: group.createdAt,
+      ownerId: user.id, ownerUsername: user.username, ownerName: user.displayName,
+      syncStatus: 'pending', pendingConflict: group.status === 'conflict'
+    })));
+    const queuedIds = new Set(queued.map(record => record.id));
+    const visibleRecords = visibleLocalRecords(records.filter(record => !queuedIds.has(record.id)).concat(queued))
+      .filter(record => record.tipo === 'malezas');
     renderVisitMap(snapshot.boundaries, visitStatsByLot(visibleRecords));
     if (snapshot.savedAt) $('#visit-map-status').textContent +=
       ' Límites guardados el ' + offlineSnapshotDate(snapshot) + '; pueden estar desactualizados.';
@@ -3966,16 +4220,55 @@ function recordRow(record, management) {
   return '<article class="record-row"><span class="record-symbol" aria-hidden="true">' + module.icon + '</span><span class="record-info"><strong>' + esc(titleFor(record)) + '</strong><small>' + esc(detail) + '</small></span><span class="record-status">' + esc(status) + '</span>' + viewAction + pdfAction + malezasPdfAction + actions + manageActions + '</article>';
 }
 function emptyState(message) { return '<div class="empty-state">' + esc(message) + '</div>'; }
+function canAccessWeeklyOutbox(group) {
+  return !!state.user && state.user.status === 'active' && group.userId === state.user.id &&
+    Array.isArray(group.captures) && group.captures.every(capture =>
+      recordHasLotAccess({ datos: capture.datos }));
+}
+function weeklyOutboxMarkup(group) {
+  if (!canAccessWeeklyOutbox(group)) {
+    return '<div class="status-strip warning-strip"><span>!</span><div><strong>Visitas pendientes con acceso cambiado</strong>' +
+      '<small>Contacta al administrador para revisar los permisos. Los datos permanecen en este dispositivo.</small></div></div>';
+  }
+  const status = group.status === 'conflict' ? 'Conflicto por revisar' : 'Pendiente de sincronizar';
+  return '<article class="record-row"><div class="record-info"><strong>' + esc(group.farm) +
+    ' · ' + group.captures.length + ' visita(s)</strong><small>' + esc(status) +
+    (group.error ? ': ' + esc(group.error) : '') + '</small><details><summary>Revisar datos</summary>' +
+    group.captures.map(capture => recordDetailsMarkup({ datos: capture.datos })).join('') +
+    '</details><button type="button" class="record-view-button" data-export-weekly="' + esc(group.id) +
+    '">Descargar para revisión</button>' +
+    (group.status === 'conflict' ? '<button type="button" class="record-view-button" data-edit-weekly="' +
+      esc(group.id) + '">Editar para revisión</button><button type="button" class="record-view-button" data-retry-weekly="' +
+      esc(group.id) + '">Reintentar</button>' : '') + '</div></article>';
+}
+async function retryWeeklyOutbox(id) {
+  if (state.syncBusy) throw new Error('Espera a que termine la sincronización antes de reintentar.');
+  const group = (await getWeeklyVisitOutbox()).find(item => item.id === id);
+  if (!group || !canAccessWeeklyOutbox(group) || !canAccessLotFollowup() || !userCanOpenModule('malezas')) {
+    throw new Error('No tienes acceso a este grupo de visitas.');
+  }
+  group.scope = offlineSnapshotKey('scope', state.user);
+  group.status = 'pending';
+  group.error = '';
+  await writeWeeklyVisitOutbox(group, 'replace-conflict');
+  await refreshLists();
+  if (navigator.onLine) await syncCloudRecords(false);
+  else toast('El grupo se reintentará al recuperar la conexión.');
+}
 async function refreshLists() {
   if (!state.db || !state.user) return;
+  const user = { ...state.user, allowedZones: [...(state.user.allowedZones || [])] };
   const localRecords = await getRecords();
+  const weeklyGroups = (await getWeeklyVisitOutbox()).filter(group => group.userId === user.id);
+  if (!sameOfflineScope(user)) return;
   const records = visibleLocalRecords(localRecords).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const pending = records.filter(record => record.syncStatus === 'pending');
   const queuedDeletions = localRecords.filter(record =>
     record.syncStatus === 'delete-pending' &&
     (record.ownerUsername === state.user.username || isActiveAdmin())
   );
-  $('#pending-badge').textContent = pending.length + queuedDeletions.length;
+  $('#pending-badge').textContent = pending.length + queuedDeletions.length + weeklyGroups.length;
+  $('#pending-weekly-list').innerHTML = weeklyGroups.map(weeklyOutboxMarkup).join('');
   const deleteNote = $('#pending-delete-note');
   if (deleteNote) {
     deleteNote.hidden = !queuedDeletions.length;
@@ -3983,7 +4276,8 @@ async function refreshLists() {
   }
   $('#record-total').textContent = records.length + (records.length === 1 ? ' registro' : ' registros');
   $('#recent-list').innerHTML = records.slice(0, 4).map(record => recordRow(record)).join('') || emptyState('Todavía no hay capturas de esta cuenta en el dispositivo.');
-  $('#pending-list').innerHTML = pending.map(record => recordRow(record)).join('') || emptyState('No hay capturas pendientes.');
+  $('#pending-list').innerHTML = pending.map(record => recordRow(record)).join('') ||
+    (weeklyGroups.length || queuedDeletions.length ? '' : emptyState('No hay capturas pendientes.'));
   const query = ($('#record-search').value || '').trim().toLocaleLowerCase('es');
   const filtered = records.filter(record => !query || JSON.stringify(record).toLocaleLowerCase('es').includes(query));
   $('#all-records').innerHTML = filtered.map(record => recordRow(record)).join('') || emptyState(records.length ? 'No hay coincidencias.' : 'Todavía no hay capturas de esta cuenta en el dispositivo.');
@@ -4459,7 +4753,8 @@ function renderLotFollowup() {
       (slot.visit_date ? ' (' + esc(formatDate(slot.visit_date)) + ')' : '') + '</li>'
     );
     summary.extraVisits.forEach((visit, index) => {
-      details.push('<li><strong>Visita adicional ' + (index + 1) + '</strong>: ' + esc(formatDate(visit.visit_date)) + '</li>');
+      details.push('<li><strong>Visita adicional ' + (index + 1) + '</strong>: ' + esc(formatDate(visit.visit_date)) +
+        (visit.pending_sync ? (visit.conflict ? ' · Conflicto por revisar' : ' · Pendiente de sincronizar') : '') + '</li>');
     });
     if (!details.length) details.push('<li>No hay visitas programadas para este lote.</li>');
     const visitCount = summary.requiredCount
@@ -4608,8 +4903,17 @@ async function loadLotFollowup() {
       renderLotFollowup();
       throw new Error('No hay seguimiento guardado para esta cuenta. Conéctate y actualiza la programación.');
     }
+    const groups = (await getWeeklyVisitOutbox()).filter(group => group.userId === user.id && canAccessWeeklyOutbox(group));
+    if (!sameOfflineScope(user)) return;
+    const pendingVisits = groups.flatMap(group => group.captures.map(capture => ({
+      record_id: capture.record_id, lot_code: capture.lot_code, cycle_date: capture.cycle_date,
+      visit_number: capture.visit_number,
+      visit_date: capture.datos.subregistros.malezas_detalle[0].FECHA || capture.datos.FECHA,
+      pending_sync: true, conflict: group.status === 'conflict'
+    })));
+    const pendingIds = new Set(pendingVisits.map(visit => visit.record_id));
     state.lotFollowupPlans = snapshot.plans;
-    state.lotFollowupVisits = snapshot.visits;
+    state.lotFollowupVisits = snapshot.visits.filter(visit => !pendingIds.has(visit.record_id)).concat(pendingVisits);
     renderLotFollowupLotOptions();
     renderLotFollowup();
     setLotFollowupStatus(saveWarning
@@ -4652,12 +4956,14 @@ function persistWeeklyCaptureDraft() {
   if (!capture || capture.busy) return Promise.resolve();
   const save = async () => {
     if (weeklyCapture !== capture || capture.busy) return;
+    if (!sameOfflineScope(capture.userScope)) throw new Error('Cambió la cuenta o sus permisos; no se guardó el borrador.');
     const data = await serializeForm(
       $('#weekly-capture-form'),
       capture.recordIds[0],
       capture.data || {},
       'malezas'
     );
+    if (!sameOfflineScope(capture.userScope)) throw new Error('Cambió la cuenta o sus permisos; no se guardó el borrador.');
     const visits = capture.visits.map((visit, index) => ({
       ...visit,
       recordId: capture.recordIds[index]
@@ -4665,7 +4971,7 @@ function persistWeeklyCaptureDraft() {
     capture.data = data;
     await putWeeklyVisitDraft({
       id: capture.draftId,
-      userId: state.user.id,
+      userId: capture.userScope.id,
       farm: capture.farm,
       assignedDate: capture.assignedDate,
       visits,
@@ -4696,9 +5002,9 @@ async function closeWeeklyCaptureDialog() {
     closeButtons.forEach(button => { button.disabled = false; });
   }
 }
-async function openWeeklyCapture(button) {
+async function openWeeklyCapture(button, reviewGroup) {
   if (!canAccessLotFollowup() || !userCanOpenModule('malezas')) throw new Error('No tienes permiso para capturar esta visita.');
-  if (!navigator.onLine || !state.configured) throw new Error('Conéctate a internet para capturar visitas semanales.');
+  const user = { ...state.user, allowedZones: [...(state.user.allowedZones || [])] };
   let visits;
   try {
     visits = JSON.parse(button.dataset.weeklyCaptureGroup);
@@ -4707,24 +5013,47 @@ async function openWeeklyCapture(button) {
   }
   if (!Array.isArray(visits) || !visits.length) throw new Error('El grupo no tiene visitas pendientes.');
   await loadLotFollowup();
-  const pending = buildLotWeeklyVisitItems(state.lotFollowupPlans, state.lotFollowupVisits, state.lotLookup, localDate());
-  visits = visits.filter(selected => pending.some(item =>
-    item.lotCode === selected.lotCode && item.visitNumber === selected.visitNumber &&
-    item.cycleDate === selected.cycleDate && item.scheduledDate === selected.scheduledDate
-  ));
+  if (!sameOfflineScope(user)) throw new Error('Cambió la cuenta o sus permisos durante la consulta.');
+  if (reviewGroup) {
+    if (state.syncBusy || !canAccessWeeklyOutbox(reviewGroup) || reviewGroup.status !== 'conflict') {
+      throw new Error('El grupo no está disponible para revisión. Actualiza Pendientes.');
+    }
+    if (visits.some(visit => {
+      const plan = state.lotFollowupPlans.find(item => item.lot_code === visit.lotCode);
+      return !plan || plan.cycle_date !== visit.cycleDate ||
+        plan.visit_dates[visit.visitNumber - 1] !== visit.scheduledDate;
+    })) {
+      throw new Error('El plan de una visita cambió. Descarga los datos pendientes y revísalos con el administrador.');
+    }
+  } else {
+    const pending = buildLotWeeklyVisitItems(state.lotFollowupPlans, state.lotFollowupVisits, state.lotLookup, localDate());
+    visits = visits.filter(selected => pending.some(item =>
+      item.lotCode === selected.lotCode && item.visitNumber === selected.visitNumber &&
+      item.cycleDate === selected.cycleDate && item.scheduledDate === selected.scheduledDate
+    ));
+  }
   if (!visits.length) throw new Error('Las visitas de este grupo ya no están pendientes. Actualiza la programación.');
   visits.sort((a, b) => a.lotCode.localeCompare(b.lotCode, undefined, { numeric: true }) || a.visitNumber - b.visitNumber);
   const farm = visits[0].farm || state.lotLookup[visits[0].lotCode].finca;
   if (visits.some(visit => normalizeLotWeeklyFarm(visit.farm) !== normalizeLotWeeklyFarm(farm))) {
     throw new Error('El grupo incluye visitas de más de una finca.');
   }
-  const draftId = weeklyVisitDraftId(farm, button.dataset.weeklyCaptureDate, visits);
+  const draftId = reviewGroup ? reviewGroup.id : weeklyVisitDraftId(farm, button.dataset.weeklyCaptureDate, visits);
+  if (!reviewGroup && (await getWeeklyVisitOutbox()).some(group => group.id === draftId && group.userId === state.user.id)) {
+    throw new Error('Este grupo ya está en la cola. Consulta Pendientes para revisarlo.');
+  }
   const draft = await getWeeklyVisitDraft(draftId);
+  if (!sameOfflineScope(user)) throw new Error('Cambió la cuenta o sus permisos durante la consulta.');
+  if (reviewGroup && (!draft || !draft.data)) {
+    throw new Error('No se encontró el borrador. Descarga los datos pendientes para revisarlos.');
+  }
   const draftByIdentity = new Map((draft && Array.isArray(draft.visits) ? draft.visits : [])
     .map(visit => [weeklyVisitIdentity(visit), visit]));
   const recordIds = visits.map(visit => {
     const saved = draftByIdentity.get(weeklyVisitIdentity(visit));
-    return saved && saved.recordId || crypto.randomUUID();
+    const queued = reviewGroup && reviewGroup.captures.find(item =>
+      item.lot_code === visit.lotCode && item.visit_number === visit.visitNumber && item.cycle_date === visit.cycleDate);
+    return queued ? queued.record_id : saved && saved.recordId || crypto.randomUUID();
   });
   const form = $('#weekly-capture-form');
   const fields = $('#weekly-capture-fields');
@@ -4812,6 +5141,8 @@ async function openWeeklyCapture(button) {
     recordIds,
     data: draft && draft.data || null,
     time: draft && draft.time || captureTimestamp(),
+    reviewConflict: !!reviewGroup,
+    userScope: user,
     busy: false,
     persistPromise: Promise.resolve()
   };
@@ -4823,21 +5154,23 @@ async function saveWeeklyCapture(event) {
   event.preventDefault();
   const capture = weeklyCapture;
   const form = event.currentTarget;
-  if (!capture || capture.busy || !form.reportValidity()) return;
-  if (!navigator.onLine || !state.configured) throw new Error('Conéctate a internet para guardar las visitas.');
-  await flushWeeklyCaptureDraft();
-  const rows = $$('.child-row', $('[data-repeat-list="malezas_detalle"]', $('#weekly-capture-fields')));
-  const invalidDate = rows.find((row, index) => {
-    const input = $('[data-child-field="FECHA"]', row);
-    return !input.value || input.value < capture.visits[index].cycleDate;
-  });
-  if (invalidDate) throw new Error('Cada fecha de visita debe ser igual o posterior al inicio del ciclo de su lote.');
-  capture.busy = true;
+  if (!capture || capture.busy || capture.saving || !form.reportValidity()) return;
+  if (!state.user || !state.configured) throw new Error('Inicia sesión y configura el espacio compartido antes de guardar visitas.');
+  const user = { ...state.user, allowedZones: [...(state.user.allowedZones || [])] };
+  capture.saving = true;
   const submit = $('#weekly-capture-submit');
   submit.disabled = true;
   $('#weekly-capture-close').disabled = true;
   $('#weekly-capture-cancel').disabled = true;
   try {
+    await flushWeeklyCaptureDraft();
+    const rows = $$('.child-row', $('[data-repeat-list="malezas_detalle"]', $('#weekly-capture-fields')));
+    const invalidDate = rows.find((row, index) => {
+      const input = $('[data-child-field="FECHA"]', row);
+      return !input.value || input.value < capture.visits[index].cycleDate;
+    });
+    if (invalidDate) throw new Error('Cada fecha de visita debe ser igual o posterior al inicio del ciclo de su lote.');
+    capture.busy = true;
     const data = await serializeForm(form, capture.recordIds[0], capture.data, 'malezas');
     data.FINCA = capture.farm;
     data.hora_registro = capture.time.horaRegistro;
@@ -4845,7 +5178,7 @@ async function saveWeeklyCapture(event) {
     const captures = capture.visits.map((visit, index) => {
       const recordId = capture.recordIds[index];
       const recordData = JSON.parse(JSON.stringify(data));
-      const detail = recordData.subregistros.malezas_detalle[0];
+      const detail = recordData.subregistros.malezas_detalle[index];
       detail.ID_NEW = recordId;
       recordData.ID = recordId;
       recordData.subregistros.malezas_detalle = [detail];
@@ -4858,24 +5191,28 @@ async function saveWeeklyCapture(event) {
         datos: recordData
       };
     });
-    await cloudRequest('rpc/save_lot_visit_captures', {
-      method: 'POST',
-      body: { p_captures: captures }
-    });
+    if (!sameOfflineScope(user)) throw new Error('Cambió la cuenta o sus permisos durante la captura.');
+    await writeWeeklyVisitOutbox({
+      id: capture.draftId, userId: user.id, scope: offlineSnapshotKey('scope', user),
+      farm: capture.farm, assignedDate: capture.assignedDate, captures,
+      status: 'pending', createdAt: new Date().toISOString()
+    }, capture.reviewConflict ? 'replace-conflict' : 'add');
+    if (!sameOfflineScope(user)) return;
     capture.data = data;
-    await deleteWeeklyVisitDraft(capture.draftId);
     $('#weekly-capture-dialog').close();
     weeklyCapture = null;
-    toast(captures.length + ' visita(s) guardada(s) para ' + capture.farm + '.');
+    toast(captures.length + ' visita(s) guardada(s) en este dispositivo y pendientes de sincronizar.');
     try {
+      await refreshLists();
       await loadLotFollowup();
-      await syncCloudRecords(false);
+      if (navigator.onLine) await syncCloudRecords(false);
     } catch (error) {
       handleLotFollowupError(error);
-      setLotFollowupStatus('Las visitas se guardaron, pero no se pudo actualizar la agenda. Usa Actualizar.', 'warning');
+      setLotFollowupStatus('Las visitas permanecen en Pendientes. Revisa la conexión y vuelve a sincronizar.', 'warning');
     }
   } finally {
     capture.busy = false;
+    capture.saving = false;
     submit.disabled = false;
     $('#weekly-capture-close').disabled = false;
     $('#weekly-capture-cancel').disabled = false;
@@ -5028,6 +5365,7 @@ async function saveLotFollowup(event) {
     if (emptyVisitSeen) throw new Error('Completa las fechas de visita en orden; no dejes espacios entre visitas.');
     visitDates.push(date);
   }
+  if (visitDates.length > 5) throw new Error('El ciclo admite como máximo cinco visitas programadas.');
   for (let index = 0; index < visitDates.length; index++) {
     if (visitDates[index] < cycleDate) throw new Error('Las fechas de visita no pueden ser anteriores a la fecha de siembra o corte.');
     if (index && visitDates[index] <= visitDates[index - 1]) throw new Error('Las fechas de visita deben ser únicas y estar en orden cronológico.');
@@ -6116,10 +6454,39 @@ $('#import-local').addEventListener('click', async () => {
 });
 $('#sync-now').addEventListener('click', async () => {
   try {
+    if (!navigator.onLine || !state.configured) throw new Error('Conéctate al espacio compartido para sincronizar.');
     const result = await syncCloudRecords(false);
     const deleted = result.deleted ? result.deleted + (result.deleted === 1 ? ' eliminación sincronizada; ' : ' eliminaciones sincronizadas; ') : '';
-    toast(result.uploaded + ' capturas nuevas sincronizadas; ' + deleted + result.downloaded + ' registros compartidos actualizados.');
+    if (result.weeklyConflicts) toast('Hay visitas con conflictos. Revísalas en Pendientes.');
+    else toast(result.uploaded + ' capturas y ' + (result.weeklyUploaded || 0) +
+      ' visitas sincronizadas; ' + deleted + result.downloaded + ' registros compartidos actualizados.');
   } catch (error) { handleCloudError(error); }
+});
+$('#pending-weekly-list').addEventListener('click', async event => {
+  const retry = event.target.closest('[data-retry-weekly]');
+  const download = event.target.closest('[data-export-weekly]');
+  const edit = event.target.closest('[data-edit-weekly]');
+  if (!retry && !download && !edit) return;
+  try {
+    if (retry) await retryWeeklyOutbox(retry.dataset.retryWeekly);
+    else if (edit) {
+      const group = (await getWeeklyVisitOutbox()).find(item => item.id === edit.dataset.editWeekly);
+      if (!group || !canAccessWeeklyOutbox(group)) throw new Error('No tienes acceso a este grupo de visitas.');
+      const visits = group.captures.map(capture => ({
+        lotCode: capture.lot_code, cycleDate: capture.cycle_date, visitNumber: capture.visit_number,
+        scheduledDate: capture.scheduled_date, farm: group.farm,
+        responsible: capture.datos.RESPONSABLE || ''
+      }));
+      await openWeeklyCapture({
+        dataset: { weeklyCaptureGroup: JSON.stringify(visits), weeklyCaptureDate: group.assignedDate }
+      }, group);
+    }
+    else {
+      const group = (await getWeeklyVisitOutbox()).find(item => item.id === download.dataset.exportWeekly);
+      if (!group || !canAccessWeeklyOutbox(group)) throw new Error('No tienes acceso a este grupo de visitas.');
+      downloadJson(group.captures, 'mym-campo-visitas-pendientes-' + localDate() + '.json');
+    }
+  } catch (error) { handleLotFollowupError(error); }
 });
 $('#lot-followup-form').addEventListener('submit', event => {
   saveLotFollowup(event).catch(handleLotFollowupError);

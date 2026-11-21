@@ -113,6 +113,16 @@ test('rejects duplicate lots and visit dates that are not chronological', () => 
   assert.ok(result.errors.some(error => error.includes('falta una fecha anterior')));
 });
 
+test('allows five scheduled dates and rejects a sixth actual date', () => {
+  const headers = ['FECHA SIEMBRA/CORTE', 'FINCA', 'LOTE', 'ESTADO', 'RESPONSABLE',
+    'VISITA 1', 'VISITA 2', 'VISITA 3', 'VISITA 4', 'VISITA 5', 'VISITA 6'];
+  const row = ['2026-01-01', 'F', '17', 'Soca', 'Ana', '2026-01-02', '2026-01-03',
+    '2026-01-04', '2026-01-05', '2026-01-06', ''];
+  assert.equal(helpers.parseLotFollowupRows([headers, row]).errors.length, 0);
+  row[10] = '2026-01-07';
+  assert.ok(helpers.parseLotFollowupRows([headers, row]).errors.some(error => error.includes('máximo cinco')));
+});
+
 test('counts distinct saved Malezas captures from the cycle date and never fulfills early', () => {
   const plan = {
     lot_code: '0000103',
@@ -158,6 +168,17 @@ test('does not mark a plan with no scheduled visits as fulfilled', () => {
   );
   assert.equal(result.fulfilled, false);
   assert.equal(result.statusKey, 'unscheduled');
+});
+
+test('marks locally queued visits as pending rather than completed', () => {
+  const plan = { lot_code: '17', cycle_date: '2026-01-01', visit_dates: ['2026-01-10'] };
+  const visits = [{ record_id: 'a', lot_code: '17', cycle_date: '2026-01-01',
+    visit_date: '2026-01-10', visit_number: 1, pending_sync: true, conflict: true }];
+  const summary = helpers.evaluateLotFollowup(plan, visits, '2026-01-11');
+  assert.equal(summary.pendingCount, 1);
+  assert.equal(summary.fulfilled, false);
+  assert.equal(summary.slots[0].status, 'Conflicto por revisar');
+  assert.equal(helpers.buildLotWeeklyVisitItems([plan], visits, {}, '2026-01-11').length, 0);
 });
 
 test('reserves explicitly numbered visits before assigning historical captures', () => {
@@ -281,9 +302,9 @@ test('existing weekly-program members keep their saved reference date if the pla
   assert.equal(candidates[0].referenceDate, '2026-03-11');
 });
 
-test('weekly agenda includes overdue and pending first-three visits but excludes completed and duplicates', () => {
+test('weekly agenda includes up to five visits but excludes completed and duplicates', () => {
   const plans = [
-    { lot_code: '1', cycle_date: '2026-01-01', responsible: 'Carlos', visit_dates: ['2026-11-10', '2026-11-17', '2026-11-24', '2026-12-01'] },
+    { lot_code: '1', cycle_date: '2026-01-01', responsible: 'Carlos', visit_dates: ['2026-11-10', '2026-11-17', '2026-11-24', '2026-12-01', '2026-12-08'] },
     { lot_code: '1', cycle_date: '2026-01-01', responsible: 'Carlos', visit_dates: ['2026-11-10', '2026-11-17', '2026-11-24'] },
     { lot_code: '2', cycle_date: '2026-01-01', responsible: 'Ana', visit_dates: ['2026-11-17'] }
   ];
@@ -302,11 +323,13 @@ test('weekly agenda includes overdue and pending first-three visits but excludes
   ]))), [
     ['0000001', 2, '2026-11-17', 'Vencida', 'Finca A'],
     ['0000002', 1, '2026-11-17', 'Vencida', 'Finca B'],
-    ['0000001', 3, '2026-11-24', 'Pendiente', 'Finca A']
+    ['0000001', 3, '2026-11-24', 'Pendiente', 'Finca A'],
+    ['0000001', 4, '2026-12-01', 'Pendiente', 'Finca A'],
+    ['0000001', 5, '2026-12-08', 'Pendiente', 'Finca A']
   ]);
   assert.deepEqual(
     JSON.parse(JSON.stringify(helpers.filterLotWeeklyVisits(items, 'finca a', '2').map(item => item.visitNumber))),
-    [2, 3]
+    [2, 3, 4, 5]
   );
   assert.deepEqual(
     JSON.parse(JSON.stringify(helpers.filterLotWeeklyVisits(items, '', '', 'Ana').map(item => [

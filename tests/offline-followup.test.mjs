@@ -34,6 +34,8 @@ function harness() {
     fetchAllLotFollowupVisits: async () => [{ record_id: 'r1' }],
     putOfflineSnapshot: async value => snapshots.set(value.id, value),
     getOfflineSnapshot: async key => snapshots.get(key),
+    getWeeklyVisitOutbox: async () => [],
+    canAccessWeeklyOutbox: () => true,
     renderLotFollowupLotOptions: () => {}, renderLotFollowup: () => {},
     console: { warn() {}, error() {} }
   });

@@ -84,3 +84,13 @@ test('maps each control range to its expected color category', () => {
     assert.match(helpers.visitMapControlClass({ latestControlPercent: percent }), new RegExp(expected));
   }
 });
+
+test('identifies visits awaiting synchronization or conflict review in map totals', () => {
+  const stats = helpers.visitStatsByLot([
+    { tipo: 'malezas', syncStatus: 'synced', datos: { LOTE: '17', FECHA: '2026-03-01' } },
+    { tipo: 'malezas', syncStatus: 'pending', pendingConflict: true, datos: { LOTE: '17', FECHA: '2026-03-02' } }
+  ]).get('0000017');
+  assert.equal(stats.visits, 2);
+  assert.equal(stats.pendingVisits, 1);
+  assert.equal(stats.conflictVisits, 1);
+});

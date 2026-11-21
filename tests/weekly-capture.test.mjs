@@ -10,7 +10,7 @@ assert.ok(start >= 0 && end > start);
 const saveSource = 'let weeklyCapture;\n' + source.slice(start, end) +
   '\n({ saveWeeklyCapture, setCapture: value => { weeklyCapture = value; }, getCapture: () => weeklyCapture })';
 
-function harness(request) {
+function harness(request, online = true) {
   const controls = {
     '#weekly-capture-submit': { disabled: false },
     '#weekly-capture-close': { disabled: false },
@@ -28,15 +28,18 @@ function harness(request) {
       return root && root.querySelector ? root.querySelector(selector) : undefined;
     },
     $$: () => rows,
-    navigator: { onLine: true },
-    state: { configured: true },
+    navigator: { onLine: online },
+    state: { configured: true, user: { id: 'one', role: 'supervisor', status: 'active', allowedZones: ['1'] } },
     serializeForm: async () => ({
       ID: 'record-1',
       subregistros: { malezas_detalle: [{ LOTE: '0000017' }, { LOTE: '0000018' }] }
     }),
-    cloudRequest: async (path, options) => { calls.push({ path, options }); return request(); },
+    sameOfflineScope: () => true,
+    offlineSnapshotKey: () => 'scope',
+    writeWeeklyVisitOutbox: async (group, operation) => { calls.push({ group, operation }); return request(); },
     loadLotFollowup: async () => {},
     syncCloudRecords: async () => {},
+    refreshLists: async () => {},
     flushWeeklyCaptureDraft: async () => {},
     deleteWeeklyVisitDraft: async () => {},
     toast: () => {},
@@ -64,17 +67,20 @@ test('saves every visit in the group together and disables a duplicate submissio
   try {
     assert.equal(h.calls.length, 1);
     assert.equal(h.controls['#weekly-capture-submit'].disabled, true);
-    assert.equal(h.calls[0].path, 'rpc/save_lot_visit_captures');
-    const body = h.calls[0].options.body;
-    assert.equal(body.p_captures.length, 2);
-    assert.equal(body.p_captures[0].record_id, 'record-1');
-    assert.equal(body.p_captures[0].lot_code, '0000017');
-    assert.equal(body.p_captures[0].visit_number, 1);
-    assert.equal(body.p_captures[0].cycle_date, '2026-01-01');
-    assert.equal(body.p_captures[1].record_id, 'record-2');
-    assert.equal(body.p_captures[1].lot_code, '0000018');
-    assert.equal(body.p_captures[1].visit_number, 2);
-    assert.equal(body.p_captures[1].datos.ID, 'record-2');
+    assert.equal(h.calls[0].operation, 'add');
+    const captures = h.calls[0].group.captures;
+    assert.equal(captures.length, 2);
+    assert.equal(captures[0].record_id, 'record-1');
+    assert.equal(captures[0].lot_code, '0000017');
+    assert.equal(captures[0].visit_number, 1);
+    assert.equal(captures[0].cycle_date, '2026-01-01');
+    assert.equal(captures[1].record_id, 'record-2');
+    assert.equal(captures[1].lot_code, '0000018');
+    assert.equal(captures[1].visit_number, 2);
+    assert.equal(captures[1].datos.ID, 'record-2');
+    assert.equal(captures[0].datos.subregistros.malezas_detalle[0].LOTE, '0000017');
+    assert.equal(captures[1].datos.subregistros.malezas_detalle[0].LOTE, '0000018');
+    assert.equal(captures[1].datos.subregistros.malezas_detalle[0].ID_NEW, 'record-2');
   } finally {
     resolve();
     await first;
@@ -90,7 +96,23 @@ test('keeps the group form and record identities after a failed save', async () 
   assert.equal(h.controls['#weekly-capture-dialog'].closed, false);
   assert.equal(h.controls['#weekly-capture-submit'].disabled, false);
   await assert.rejects(h.saveWeeklyCapture(event), /Sin conexión/);
-  assert.deepEqual(Array.from(h.calls[1].options.body.p_captures.map(item => item.record_id)), ['record-1', 'record-2']);
+  assert.deepEqual(Array.from(h.calls[1].group.captures.map(item => item.record_id)), ['record-1', 'record-2']);
+});
+
+test('queues the entire group without an internet connection', async () => {
+  const h = harness(async () => {}, false);
+  await h.saveWeeklyCapture({ preventDefault() {}, currentTarget: h.form });
+  assert.equal(h.calls[0].group.status, 'pending');
+  assert.equal(h.calls[0].group.captures.length, 2);
+  assert.equal(h.controls['#weekly-capture-dialog'].closed, true);
+});
+
+test('replaces a reviewed conflict only through the guarded operation', async () => {
+  const h = harness(async () => {});
+  h.getCapture().reviewConflict = true;
+  await h.saveWeeklyCapture({ preventDefault() {}, currentTarget: h.form });
+  assert.equal(h.calls[0].operation, 'replace-conflict');
+  assert.deepEqual(Array.from(h.calls[0].group.captures.map(item => item.record_id)), ['record-1', 'record-2']);
 });
 
 test('loads visit numbers together with their records for the weekly schedule', async () => {
@@ -110,6 +132,7 @@ test('loads visit numbers together with their records for the weekly schedule', 
     renderLotFollowupLotOptions: () => {}, renderLotFollowup: () => {},
     offlineSnapshotKey: () => 'user', sameOfflineScope: () => true,
     putOfflineSnapshot: async () => {}, getOfflineSnapshot: async () => null,
+    getWeeklyVisitOutbox: async () => [], canAccessWeeklyOutbox: () => true,
     offlineSnapshotDate: () => 'ahora'
   });
   await loadLotFollowup();
@@ -174,6 +197,7 @@ test('stores the combined form, image data, and every record identity in the loc
     visits: [{ lotCode: '0000017', visitNumber: 1 }, { lotCode: '0000018', visitNumber: 2 }],
     recordIds: ['record-1', 'record-2'],
     data: {},
+    userScope: { id: 'user-id' },
     time: { horaRegistro: '08:30' },
     persistPromise: Promise.resolve(),
     busy: false
@@ -182,6 +206,7 @@ test('stores the combined form, image data, and every record identity in the loc
   const { persistWeeklyCaptureDraft } = runInNewContext(source.slice(start, end) + '\n({ persistWeeklyCaptureDraft })', {
     weeklyCapture: capture,
     state: { user: { id: 'user-id' } },
+    sameOfflineScope: () => true,
     $: selector => selector === '#weekly-capture-draft-status' ? status : {},
     serializeForm: async () => ({
       subregistros: { malezas_detalle: [{ IMAGEN: [{ name: 'lote1.png' }] }, { IMAGEN: [{ name: 'lote2.png' }] }] }
@@ -214,6 +239,7 @@ test('renders a single group capture action and keeps each original visit in the
     ]
   });
   assert.equal((html.match(/data-weekly-capture-group=/g) || []).length, 1);
+  assert.match(html, /data-weekly-capture-date="2026-03-05"/);
   assert.equal((html.match(/<tr>/g) || []).length, 3);
   assert.match(html, /Capturar visitas del día \(2\)/);
   assert.match(html, /2026-03-01/);

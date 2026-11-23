@@ -7,7 +7,9 @@ const source = await readFile(new URL('../app.js', import.meta.url), 'utf8');
 const start = source.indexOf('async function saveWeeklyCapture(event) {');
 const end = source.indexOf('\nfunction showWeeklyCaptureError', start);
 assert.ok(start >= 0 && end > start);
-const saveSource = 'let weeklyCapture;\n' + source.slice(start, end) +
+const saveSource = 'let weeklyCapture;\n' +
+  'function weeklyVisitIdentity(visit) { return [visit.lotCode, visit.cycleDate, visit.visitNumber, visit.scheduledDate].join(\":\"); }\n' +
+  source.slice(start, end) +
   '\n({ saveWeeklyCapture, setCapture: value => { weeklyCapture = value; }, getCapture: () => weeklyCapture })';
 
 function harness(request, online = true) {
@@ -107,6 +109,51 @@ test('queues the entire group without an internet connection', async () => {
   assert.equal(h.controls['#weekly-capture-dialog'].closed, true);
 });
 
+test('queues only included lots and retains each selected lot’s own data and identity', async () => {
+  const h = harness(async () => {}, false);
+  h.getCapture().excludedVisits = new Set(['0000017:2026-01-01:1:2026-03-01']);
+  await h.saveWeeklyCapture({ preventDefault() {}, currentTarget: h.form });
+  const captures = h.calls[0].group.captures;
+  assert.equal(captures.length, 1);
+  assert.equal(captures[0].record_id, 'record-2');
+  assert.equal(captures[0].lot_code, '0000018');
+  assert.equal(captures[0].datos.subregistros.malezas_detalle[0].LOTE, '0000018');
+});
+
+test('does not queue a group with every lot excluded', async () => {
+  const h = harness(async () => {}, false);
+  h.getCapture().excludedVisits = new Set([
+    '0000017:2026-01-01:1:2026-03-01', '0000018:2026-01-01:2:2026-03-02'
+  ]);
+  await assert.rejects(h.saveWeeklyCapture({ preventDefault() {}, currentTarget: h.form }), /al menos un lote/);
+  assert.equal(h.calls.length, 0);
+  assert.equal(h.controls['#weekly-capture-dialog'].closed, false);
+});
+
+test('excluding a lot disables its inputs and restoring it preserves their original disabled state', () => {
+  const first = source.indexOf('function setWeeklyVisitIncluded(');
+  const last = source.indexOf('\nfunction updateWeeklyCaptureDateLimit', first);
+  const inputs = [{ disabled: false, dataset: {} }, { disabled: true, dataset: {} }];
+  const grid = {}, notice = {}, button = { setAttribute(name, value) { this[name] = value; } };
+  const row = { dataset: {} };
+  const toggle = runInNewContext(source.slice(first, last) + '\nsetWeeklyVisitIncluded', {
+    $: selector => selector === '.field-grid' ? grid : selector === '[data-weekly-toggle-visit]' ? button :
+      selector === '[data-child-field="LOTE"]' ? { value: '0000017' } : notice,
+    $$: () => inputs
+  });
+  toggle(row, false);
+  assert.equal(grid.hidden, true);
+  assert.equal(notice.hidden, false);
+  assert.deepEqual(inputs.map(input => input.disabled), [true, true]);
+  assert.equal(button['aria-expanded'], 'false');
+  assert.equal(button['aria-label'], 'Volver a incluir lote 0000017');
+  toggle(row, true);
+  assert.equal(grid.hidden, false);
+  assert.deepEqual(inputs.map(input => input.disabled), [false, true]);
+  assert.equal(button['aria-expanded'], 'true');
+  assert.equal(button['aria-label'], 'Quitar lote 0000017 de esta captura');
+});
+
 test('replaces a reviewed conflict only through the guarded operation', async () => {
   const h = harness(async () => {});
   h.getCapture().reviewConflict = true;
@@ -200,14 +247,17 @@ test('stores the combined form, image data, and every record identity in the loc
     userScope: { id: 'user-id' },
     time: { horaRegistro: '08:30' },
     persistPromise: Promise.resolve(),
-    busy: false
+    busy: false,
+    excludedVisits: new Set(['0000018::2:'])
   };
   const status = { textContent: '' };
   const { persistWeeklyCaptureDraft } = runInNewContext(source.slice(start, end) + '\n({ persistWeeklyCaptureDraft })', {
     weeklyCapture: capture,
     state: { user: { id: 'user-id' } },
     sameOfflineScope: () => true,
+    weeklyVisitIdentity: visit => [visit.lotCode, visit.cycleDate, visit.visitNumber, visit.scheduledDate].join(':'),
     $: selector => selector === '#weekly-capture-draft-status' ? status : {},
+    $$: () => [],
     serializeForm: async () => ({
       subregistros: { malezas_detalle: [{ IMAGEN: [{ name: 'lote1.png' }] }, { IMAGEN: [{ name: 'lote2.png' }] }] }
     }),
@@ -217,6 +267,7 @@ test('stores the combined form, image data, and every record identity in the loc
   assert.equal(savedDraft.id, 'draft-id');
   assert.equal(savedDraft.userId, 'user-id');
   assert.deepEqual(Array.from(savedDraft.visits, visit => visit.recordId), ['record-1', 'record-2']);
+  assert.deepEqual(Array.from(savedDraft.visits, visit => visit.excluded), [false, true]);
   assert.equal(savedDraft.data.subregistros.malezas_detalle[1].IMAGEN[0].name, 'lote2.png');
   assert.match(status.textContent, /Borrador guardado/);
 });

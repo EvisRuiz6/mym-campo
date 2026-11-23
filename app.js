@@ -4943,6 +4943,36 @@ function weeklyVisitDraftId(farm, assignedDate, visits) {
   return 'weekly-visit:' + state.user.id + ':' + normalizeLotWeeklyFarm(farm) + ':' +
     assignedDate + ':' + encodeURIComponent(identity);
 }
+function setWeeklyVisitIncluded(row, included) {
+  const grid = $('.field-grid', row);
+  const button = $('[data-weekly-toggle-visit]', row);
+  const notice = $('[data-weekly-excluded-notice]', row);
+  row.dataset.weeklyExcluded = included ? '' : 'true';
+  grid.hidden = !included;
+  for (const input of $$('input, select, textarea, button', grid)) {
+    if (!included) {
+      input.dataset.weeklyWasDisabled = input.disabled ? 'true' : 'false';
+      input.disabled = true;
+    } else if (input.dataset.weeklyWasDisabled !== undefined) {
+      input.disabled = input.dataset.weeklyWasDisabled === 'true';
+      delete input.dataset.weeklyWasDisabled;
+    }
+  }
+  notice.hidden = included;
+  button.textContent = included ? 'Quitar lote de esta captura' : 'Volver a incluir lote';
+  const lot = $('[data-child-field="LOTE"]', row).value;
+  button.setAttribute('aria-label', included ? 'Quitar lote ' + lot + ' de esta captura' : 'Volver a incluir lote ' + lot);
+  button.setAttribute('aria-expanded', String(included));
+}
+function updateWeeklyCaptureDateLimit(capture) {
+  const active = capture.visits.filter(visit => !capture.excludedVisits.has(weeklyVisitIdentity(visit)));
+  $('[name="FECHA"]', $('#weekly-capture-fields')).min = active.reduce(
+    (latest, visit) => visit.cycleDate > latest ? visit.cycleDate : latest, ''
+  );
+  $('#weekly-capture-summary').textContent = capture.farm + ' · Fecha asignada: ' +
+    formatDate(capture.assignedDate) + ' · ' + active.length + ' lote(s) incluido(s)' +
+    (active.length < capture.visits.length ? ' · ' + (capture.visits.length - active.length) + ' pendiente(s) excluido(s)' : '');
+}
 function queueWeeklyCaptureDraft() {
   if (!weeklyCapture || weeklyCapture.busy) return;
   if (weeklyCaptureDraftTimer) clearTimeout(weeklyCaptureDraftTimer);
@@ -4966,9 +4996,12 @@ function persistWeeklyCaptureDraft() {
     if (!sameOfflineScope(capture.userScope)) throw new Error('Cambió la cuenta o sus permisos; no se guardó el borrador.');
     const visits = capture.visits.map((visit, index) => ({
       ...visit,
-      recordId: capture.recordIds[index]
+      recordId: capture.recordIds[index],
+      excluded: !!capture.excludedVisits?.has(weeklyVisitIdentity(visit))
     }));
     capture.data = data;
+    $$('.child-row', $('[data-repeat-list="malezas_detalle"]', $('#weekly-capture-fields')))
+      .forEach((row, index) => { row.dataset.originalIndex = String(index); });
     await putWeeklyVisitDraft({
       id: capture.draftId,
       userId: capture.userScope.id,
@@ -5073,7 +5106,17 @@ async function openWeeklyCapture(button, reviewGroup) {
       '<div class="field full weekly-visit-row-heading"><strong>Lote ' + esc(visit.lotCode) +
       ' · Visita ' + visit.visitNumber + '</strong><span>Fecha programada original: ' +
       esc(formatDate(visit.scheduledDate)) + '</span></div>');
-    $('[data-remove-child]', row).hidden = true;
+    const removeButton = $('[data-remove-child]', row);
+    if (reviewGroup) removeButton.hidden = true;
+    else {
+      removeButton.removeAttribute('data-remove-child');
+      removeButton.setAttribute('data-weekly-toggle-visit', '');
+      removeButton.setAttribute('aria-label', 'Quitar lote ' + visit.lotCode + ' de esta captura');
+      removeButton.setAttribute('aria-expanded', 'true');
+      removeButton.textContent = 'Quitar lote de esta captura';
+      row.insertAdjacentHTML('afterbegin', '<p data-weekly-excluded-notice class="field-hint" hidden>Lote ' +
+        esc(visit.lotCode) + ' excluido: seguirá pendiente y sus datos no se guardarán al enviar esta captura.</p>');
+    }
     const lot = $('[data-child-field="LOTE"]', row);
     lot.value = visit.lotCode;
     lot.readOnly = true;
@@ -5104,7 +5147,10 @@ async function openWeeklyCapture(button, reviewGroup) {
       const row = $$('.child-row', list)[index];
       if (saved && draft.data.subregistros && draft.data.subregistros.malezas_detalle) {
         const draftIndex = draft.visits.findIndex(item => weeklyVisitIdentity(item) === weeklyVisitIdentity(visit));
-        if (draftIndex >= 0) setChildFields(row, draft.data.subregistros.malezas_detalle[draftIndex]);
+        if (draftIndex >= 0) {
+          row.dataset.originalIndex = String(draftIndex);
+          setChildFields(row, draft.data.subregistros.malezas_detalle[draftIndex]);
+        }
       }
       $('[data-child-field="LOTE"]', row).value = visit.lotCode;
       $('[data-child-field="LOTE"]', row).readOnly = true;
@@ -5139,6 +5185,9 @@ async function openWeeklyCapture(button, reviewGroup) {
     assignedDate: button.dataset.weeklyCaptureDate,
     visits,
     recordIds,
+    excludedVisits: new Set(reviewGroup ? [] : visits
+      .filter(visit => draftByIdentity.get(weeklyVisitIdentity(visit))?.excluded)
+      .map(weeklyVisitIdentity)),
     data: draft && draft.data || null,
     time: draft && draft.time || captureTimestamp(),
     reviewConflict: !!reviewGroup,
@@ -5146,6 +5195,10 @@ async function openWeeklyCapture(button, reviewGroup) {
     busy: false,
     persistPromise: Promise.resolve()
   };
+  if (!reviewGroup) $$('.child-row', list).forEach((row, index) => {
+    if (weeklyCapture.excludedVisits.has(weeklyVisitIdentity(visits[index]))) setWeeklyVisitIncluded(row, false);
+  });
+  updateWeeklyCaptureDateLimit(weeklyCapture);
   $('[data-weeds-retry-location]', fields).addEventListener('click', () => captureWeedsLocation(fields));
   $('#weekly-capture-dialog').showModal();
   captureWeedsLocation(fields);
@@ -5154,7 +5207,11 @@ async function saveWeeklyCapture(event) {
   event.preventDefault();
   const capture = weeklyCapture;
   const form = event.currentTarget;
-  if (!capture || capture.busy || capture.saving || !form.reportValidity()) return;
+  if (!capture || capture.busy || capture.saving) return;
+  if (capture.excludedVisits && capture.visits.every(visit => capture.excludedVisits.has(weeklyVisitIdentity(visit)))) {
+    throw new Error('Incluye al menos un lote para guardar. Los lotes excluidos seguirán pendientes.');
+  }
+  if (!form.reportValidity()) return;
   if (!state.user || !state.configured) throw new Error('Inicia sesión y configura el espacio compartido antes de guardar visitas.');
   const user = { ...state.user, allowedZones: [...(state.user.allowedZones || [])] };
   capture.saving = true;
@@ -5166,6 +5223,7 @@ async function saveWeeklyCapture(event) {
     await flushWeeklyCaptureDraft();
     const rows = $$('.child-row', $('[data-repeat-list="malezas_detalle"]', $('#weekly-capture-fields')));
     const invalidDate = rows.find((row, index) => {
+      if (capture.excludedVisits && capture.excludedVisits.has(weeklyVisitIdentity(capture.visits[index]))) return false;
       const input = $('[data-child-field="FECHA"]', row);
       return !input.value || input.value < capture.visits[index].cycleDate;
     });
@@ -5175,21 +5233,22 @@ async function saveWeeklyCapture(event) {
     data.FINCA = capture.farm;
     data.hora_registro = capture.time.horaRegistro;
     const details = data.subregistros.malezas_detalle;
-    const captures = capture.visits.map((visit, index) => {
+    const captures = capture.visits.flatMap((visit, index) => {
+      if (capture.excludedVisits && capture.excludedVisits.has(weeklyVisitIdentity(visit))) return [];
       const recordId = capture.recordIds[index];
       const recordData = JSON.parse(JSON.stringify(data));
       const detail = recordData.subregistros.malezas_detalle[index];
       detail.ID_NEW = recordId;
       recordData.ID = recordId;
       recordData.subregistros.malezas_detalle = [detail];
-      return {
+      return [{
         record_id: recordId,
         lot_code: visit.lotCode,
         cycle_date: visit.cycleDate,
         visit_number: visit.visitNumber,
         scheduled_date: visit.scheduledDate,
         datos: recordData
-      };
+      }];
     });
     if (!sameOfflineScope(user)) throw new Error('Cambió la cuenta o sus permisos durante la captura.');
     await writeWeeklyVisitOutbox({
@@ -6524,6 +6583,20 @@ $('#weekly-capture-form').addEventListener('input', event => {
 });
 $('#weekly-capture-form').addEventListener('change', event => {
   updateWeedsDatesForInput(event.target, $('#weekly-capture-fields'));
+  queueWeeklyCaptureDraft();
+});
+$('#weekly-capture-form').addEventListener('click', event => {
+  const button = event.target.closest('[data-weekly-toggle-visit]');
+  const capture = weeklyCapture;
+  if (!button || !capture || capture.busy || capture.saving || capture.reviewConflict) return;
+  const row = button.closest('.child-row');
+  const identity = row.dataset.weeklyVisitIdentity;
+  if (!capture.visits.some(visit => weeklyVisitIdentity(visit) === identity)) return;
+  const included = capture.excludedVisits.has(identity);
+  if (included) capture.excludedVisits.delete(identity);
+  else capture.excludedVisits.add(identity);
+  setWeeklyVisitIncluded(row, included);
+  updateWeeklyCaptureDateLimit(capture);
   queueWeeklyCaptureDraft();
 });
 $('#weekly-capture-form').addEventListener('submit', event => {

@@ -1064,6 +1064,9 @@ function canViewAllRecords() {
   return !!state.user && state.user.status === 'active' && ['admin', 'coordinador'].includes(state.user.role);
 }
 function canAccessLotFollowup() {
+  return !!state.user && state.user.status === 'active' && ['admin', 'supervisor', 'coordinador'].includes(state.user.role);
+}
+function canReviewLotVisits() {
   return !!state.user && state.user.status === 'active' && ['admin', 'supervisor'].includes(state.user.role);
 }
 function consumeInviteLink() {
@@ -4858,9 +4861,9 @@ async function fetchAllLotWeeklyPrograms() {
     if (page.length < 1000) return programs;
   }
 }
-async function fetchAllLotFollowupVisits(forExport = false) {
+async function fetchAllLotFollowupVisits() {
   const visits = [];
-  const rpc = forExport && state.user.role === 'coordinador'
+  const rpc = state.user.role === 'coordinador'
     ? 'get_export_lot_visits' : 'get_lot_followup_visits_with_links';
   for (let offset = 0, page; ; offset += 1000) {
     page = await cloudRequest('rpc/' + rpc + '?select=record_id,lot_code,visit_date,cycle_date,visit_number&order=record_id.asc,lot_code.asc&limit=1000&offset=' + offset, {
@@ -5297,7 +5300,7 @@ function showWeeklyCaptureError(error) {
   node.hidden = false;
 }
 function editLotWeeklyProgram(programId) {
-  if (!canAccessLotFollowup()) return;
+  if (!canReviewLotVisits()) return;
   const program = state.lotWeeklyPrograms.find(item => String(item.id) === String(programId));
   if (!program) {
     setLotFollowupStatus('No se encontró el programa semanal que intentas editar. Actualiza la lista e inténtalo de nuevo.', 'warning');
@@ -5312,7 +5315,7 @@ function editLotWeeklyProgram(programId) {
 }
 async function saveLotWeeklyProgram(event) {
   event.preventDefault();
-  if (!canAccessLotFollowup()) throw new Error('Solo una cuenta administradora o supervisora activa puede gestionar este módulo.');
+  if (!canReviewLotVisits()) throw new Error('Solo una cuenta administradora o supervisora activa puede gestionar este módulo.');
   if (!state.configured || !navigator.onLine) throw new Error('Conéctate a internet para guardar cambios en el espacio compartido.');
   const form = $('#lot-weekly-program-form');
   if (!form.reportValidity()) return;
@@ -5356,7 +5359,7 @@ async function saveLotWeeklyProgram(event) {
   toast('Programa semanal guardado.');
 }
 async function saveLotWeeklyProgramDate(programId) {
-  if (!canAccessLotFollowup()) throw new Error('Solo una cuenta administradora o supervisora activa puede gestionar este módulo.');
+  if (!canReviewLotVisits()) throw new Error('Solo una cuenta administradora o supervisora activa puede gestionar este módulo.');
   if (!state.configured || !navigator.onLine) throw new Error('Conéctate a internet para guardar cambios en el espacio compartido.');
   const program = state.lotWeeklyPrograms.find(item => String(item.id) === String(programId));
   const dateInput = $$('[data-lot-weekly-date]').find(input => String(input.dataset.lotWeeklyDate) === String(programId));
@@ -5377,7 +5380,7 @@ async function saveLotWeeklyProgramDate(programId) {
   toast('Fecha programada actualizada.');
 }
 async function deleteLotWeeklyProgram(programId) {
-  if (!canAccessLotFollowup()) throw new Error('Solo una cuenta administradora o supervisora activa puede gestionar este módulo.');
+  if (!canReviewLotVisits()) throw new Error('Solo una cuenta administradora o supervisora activa puede gestionar este módulo.');
   if (!state.configured || !navigator.onLine) throw new Error('Conéctate a internet para eliminar el programa compartido.');
   const program = state.lotWeeklyPrograms.find(item => String(item.id) === String(programId));
   if (!program) throw new Error('No se encontró el programa semanal. Actualiza la lista e inténtalo de nuevo.');
@@ -5542,7 +5545,7 @@ function renderHome() {
   $('#welcome-user').textContent = state.user.displayName.split(/\s+/)[0];
   $('#active-user').textContent = state.user.displayName;
   $('#active-role').textContent = roleName(state.user.role);
-  $('#open-visit-map').hidden = !canAccessLotFollowup();
+  $('#open-visit-map').hidden = !canReviewLotVisits();
   $$('.admin-nav').forEach(group => { group.hidden = !canViewAllRecords(); });
   $('[data-page="usuarios"]').hidden = !isActiveAdmin();
   $$('[data-admin-only]').forEach(element => { element.hidden = !isActiveAdmin(); });
@@ -5611,7 +5614,7 @@ function navigate(page) {
   if (!WORKSPACE_PAGES.includes(page)) return;
   if ((page === 'usuarios' && !isActiveAdmin()) || (page === 'exportar-excel' && !canViewAllRecords())) { toast('No tienes permiso para abrir esta pantalla.'); return; }
   if (page === 'seguimiento-lotes' && !isActiveAdmin()) { toast('Solo una cuenta administradora activa puede abrir el seguimiento de lotes.'); return; }
-  if (page === 'programacion-semanal' && !canAccessLotFollowup()) { toast('Solo una cuenta administradora o supervisora activa puede consultar las visitas semanales.'); return; }
+  if (page === 'programacion-semanal' && !canAccessLotFollowup()) { toast('No tienes permiso para consultar las visitas semanales.'); return; }
   if (!state.editingRecord && WORK_CONTEXT_MODULES.includes(state.currentModule) &&
       !saveWorkContextDraft(state.currentModule, false)) {
     toast('No se pudo conservar el contexto de trabajo en este dispositivo.');
@@ -5784,7 +5787,7 @@ async function downloadAdminExcel(event) {
     const records = await fetchExcelRecords(selected, () =>
       sequence === excelExportSequence && canViewAllRecords() && state.user.id === userId);
     if (!records) return;
-    const visitLinks = selected.includes('malezas') ? await fetchAllLotFollowupVisits(true) : [];
+    const visitLinks = selected.includes('malezas') ? await fetchAllLotFollowupVisits() : [];
     if (sequence !== excelExportSequence || !canViewAllRecords() || state.user.id !== userId) return;
     status.textContent = 'Preparando el archivo Excel…';
     const result = await ExcelExport.createWorkbook(records, selected, filters, modules, { childSchemas, qualityForms }, window.ExcelJS,

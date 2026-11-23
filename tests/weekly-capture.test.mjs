@@ -12,7 +12,7 @@ const saveSource = 'let weeklyCapture;\n' +
   source.slice(start, end) +
   '\n({ saveWeeklyCapture, setCapture: value => { weeklyCapture = value; }, getCapture: () => weeklyCapture })';
 
-function harness(request, online = true) {
+function harness(request, online = true, role = 'supervisor') {
   const controls = {
     '#weekly-capture-submit': { disabled: false },
     '#weekly-capture-close': { disabled: false },
@@ -31,7 +31,7 @@ function harness(request, online = true) {
     },
     $$: () => rows,
     navigator: { onLine: online },
-    state: { configured: true, user: { id: 'one', role: 'supervisor', status: 'active', allowedZones: ['1'] } },
+    state: { configured: true, user: { id: 'one', role, status: 'active', allowedZones: ['1'] } },
     serializeForm: async () => ({
       ID: 'record-1',
       subregistros: { malezas_detalle: [{ LOTE: '0000017' }, { LOTE: '0000018' }] }
@@ -109,6 +109,13 @@ test('queues the entire group without an internet connection', async () => {
   assert.equal(h.controls['#weekly-capture-dialog'].closed, true);
 });
 
+test('coordinator queues a weekly group offline for later synchronization', async () => {
+  const h = harness(async () => {}, false, 'coordinador');
+  await h.saveWeeklyCapture({ preventDefault() {}, currentTarget: h.form });
+  assert.equal(h.calls[0].group.status, 'pending');
+  assert.equal(h.calls[0].group.captures.length, 2);
+});
+
 test('queues only included lots and retains each selected lot’s own data and identity', async () => {
   const h = harness(async () => {}, false);
   h.getCapture().excludedVisits = new Set(['0000017:2026-01-01:1:2026-03-01']);
@@ -163,7 +170,7 @@ test('replaces a reviewed conflict only through the guarded operation', async ()
 });
 
 test('loads visit numbers together with their records for the weekly schedule', async () => {
-  const loadStart = source.indexOf('async function fetchAllLotFollowupVisits(forExport = false) {');
+  const loadStart = source.indexOf('async function fetchAllLotFollowupVisits() {');
   const loadEnd = source.indexOf('\nlet weeklyCapture = null;', loadStart);
   assert.ok(loadStart >= 0 && loadEnd > loadStart);
   const state = { configured: true, user: { id: 'user', status: 'active' }, lotFollowupLoadPromise: null };

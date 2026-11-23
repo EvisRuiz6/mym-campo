@@ -163,7 +163,7 @@ test('replaces a reviewed conflict only through the guarded operation', async ()
 });
 
 test('loads visit numbers together with their records for the weekly schedule', async () => {
-  const loadStart = source.indexOf('async function fetchAllLotFollowupVisits() {');
+  const loadStart = source.indexOf('async function fetchAllLotFollowupVisits(forExport = false) {');
   const loadEnd = source.indexOf('\nlet weeklyCapture = null;', loadStart);
   assert.ok(loadStart >= 0 && loadEnd > loadStart);
   const state = { configured: true, user: { id: 'user', status: 'active' }, lotFollowupLoadPromise: null };

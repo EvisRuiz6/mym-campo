@@ -161,6 +161,21 @@ test('restores menu state per account and rejects pages outside the current role
   assert.equal(menu.restoreWorkspaceMenu(), 'inicio');
 });
 
+test('only administrators can restore the lot followup page while supervisors keep weekly visits', () => {
+  const code = extract('function workspaceMenuKey()', '\nfunction setMobileMenu(open)');
+  let page = 'seguimiento-lotes';
+  const state = { user: { id: 'a' } };
+  const menu = runInNewContext(code + '\n({ restoreWorkspaceMenu })', {
+    state, WORKSPACE_MENU_KEY: 'menu:', WORKSPACE_PAGES: ['inicio', 'seguimiento-lotes', 'programacion-semanal'],
+    localStorage: { getItem: () => JSON.stringify({ page }), setItem() {} },
+    $$: () => [], isActiveAdmin: () => false, canAccessLotFollowup: () => true,
+    canViewAllRecords: () => false, console, toast() {}
+  });
+  assert.equal(menu.restoreWorkspaceMenu(), 'inicio');
+  page = 'programacion-semanal';
+  assert.equal(menu.restoreWorkspaceMenu(), 'programacion-semanal');
+});
+
 test('opens and closes the mobile menu with synchronized accessibility state', () => {
   const code = extract('function setMobileMenu(open)', '\nfunction navigate(page)');
   const classes = () => ({

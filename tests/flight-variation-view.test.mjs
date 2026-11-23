@@ -147,7 +147,7 @@ test('does not display another user flight in the regular local record lists', (
   const visible = runInNewContext(
     extract('function visibleLocalRecords(records)', "\n$('#climate-chart-filters')") + '\nvisibleLocalRecords',
     { state: { user: { ...owner, role: 'supervisor' } }, recordHasLotAccess: () => true,
-      isActiveAdmin: () => false, flightRecordBelongsToUser: helpers.flightRecordBelongsToUser }
+      isActiveAdmin: () => false, canViewAllRecords: () => false, flightRecordBelongsToUser: helpers.flightRecordBelongsToUser }
   );
   const rows = [flight('own', 'one'), flight('other', 'two'), { id: 'other-malezas', tipo: 'malezas', syncStatus: 'synced' }];
   assert.deepEqual(plain(visible(rows).map(row => row.id)), ['own']);

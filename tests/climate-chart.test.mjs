@@ -74,7 +74,7 @@ test('hides other climate records from the ordinary lists and exports', () => {
     const visible = runInNewContext(
       extract('function visibleLocalRecords(records)', "\n$('#climate-chart-filters')") + '\nvisibleLocalRecords',
       { state: { user: { ...user, role } }, recordHasLotAccess: () => true,
-        isActiveAdmin: () => false, flightRecordBelongsToUser: helpers.flightRecordBelongsToUser }
+        isActiveAdmin: () => false, canViewAllRecords: () => false, flightRecordBelongsToUser: helpers.flightRecordBelongsToUser }
     );
     const rows = [record('own', 'one', {}), record('other', 'two', {}, { ownerUsername: 'uno' })];
     assert.deepEqual(plain(visible(rows).map(row => row.id)), ['own']);

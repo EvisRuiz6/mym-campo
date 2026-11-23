@@ -140,12 +140,12 @@ test('non-admin users cannot invoke the export query from the UI handler', async
   const end = source.indexOf('\nfunction handleCloudError(', start);
   let queried = false, message = '';
   const run = runInNewContext(source.slice(start, end) + '\ndownloadAdminExcel', {
-    isActiveAdmin: () => false, toast: text => { message = text; },
+    canViewAllRecords: () => false, toast: text => { message = text; },
     cloudRequest: async () => { queried = true; }
   });
   await run({ preventDefault() {} });
   assert.equal(queried, false);
-  assert.match(message, /administradora/);
+  assert.match(message, /permiso/);
 });
 
 test('paginates server records and reports failures without producing a partial download', async () => {
@@ -158,7 +158,7 @@ test('paginates server records and reports failures without producing a partial 
   let downloaded = 0, fail = false, produced = 0;
   const context = {
     state, modules, childSchemas: {}, qualityForms: {}, navigator: { onLine: true }, weedsCatorcenaForDate() {},
-    isActiveAdmin: () => true, $: selector => controls[selector],
+    canViewAllRecords: () => true, $: selector => controls[selector],
     $$: () => [{ value: 'vuelos' }], console: { error() {} },
     ExcelExport: { dateValue: exportExcel.dateValue, createWorkbook: async records => {
       produced = records.length;
@@ -198,7 +198,7 @@ test('requires linked visit data before downloading Malezas and reports lookup f
   let fail = false, downloaded = 0, passedLinks;
   const run = runInNewContext(source.slice(start, end) + '\ndownloadAdminExcel', {
     state: { user: { id: 'admin' }, configured: true }, modules, childSchemas: {}, qualityForms: {},
-    navigator: { onLine: true }, isActiveAdmin: () => true, $: selector => controls[selector],
+    navigator: { onLine: true }, canViewAllRecords: () => true, $: selector => controls[selector],
     $$: () => [{ value: 'malezas' }], console: { error() {} },
     fetchAllLotFollowupVisits: async () => { if (fail) throw new Error('red interrumpida'); return links; },
     weedsCatorcenaForDate() {},
@@ -231,7 +231,7 @@ test('loads dropdown options across pages, keeps selections, and offers retry on
   let calls = 0, fail = false;
   const state = { user: { id: 'admin' }, configured: true };
   const run = runInNewContext(source.slice(start, end) + '\n({ loadExcelFilterOptions })', {
-    state, modules, isActiveAdmin: () => !!state.user, navigator: { onLine: true },
+    state, modules, canViewAllRecords: () => !!state.user, navigator: { onLine: true },
     $: selector => controls[selector], esc: text => String(text).replaceAll('"', '&quot;'),
     ExcelExport: exportExcel, console: { error() {} },
     cloudRequest: async () => {
@@ -263,7 +263,7 @@ test('ignores dropdown responses from a previous user session', async () => {
   const state = { user: { id: 'admin' }, configured: true };
   let resolve;
   const run = runInNewContext(source.slice(start, end) + '\n({ loadExcelFilterOptions })', {
-    state, modules, isActiveAdmin: () => !!state.user, navigator: { onLine: true },
+    state, modules, canViewAllRecords: () => !!state.user, navigator: { onLine: true },
     $: selector => controls[selector], ExcelExport: exportExcel,
     cloudRequest: () => new Promise(done => { resolve = done; }), console: { error() {} }
   });

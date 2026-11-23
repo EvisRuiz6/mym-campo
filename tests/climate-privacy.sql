@@ -33,7 +33,7 @@ begin
     (second_climate, second_id, 'clima', 1, jsonb_build_object('zona', zone_name, 'lecturas', '[]'::jsonb)),
     (supervisor_climate, supervisor_id, 'clima', 1, jsonb_build_object('zona', zone_name, 'lecturas', '[]'::jsonb)),
     (first_flight, first_id, 'vuelos', 1, jsonb_build_object('zona', zone_name)),
-    (other_record, first_id, 'malezas', 1, jsonb_build_object('zona', zone_name));
+    (other_record, first_id, 'calidad', 1, jsonb_build_object('zona', zone_name));
   perform set_config('test.admin_id', admin_id::text, true);
   perform set_config('test.first_id', first_id::text, true);
   perform set_config('test.supervisor_id', supervisor_id::text, true);

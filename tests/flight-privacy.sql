@@ -31,7 +31,7 @@ begin
     (first_flight, first_id, 'vuelos', 1, jsonb_build_object('zona', zone_name, 'area_ha', '2')),
     (second_flight, second_id, 'vuelos', 1, jsonb_build_object('zona', zone_name, 'area_ha', '3')),
     (supervisor_flight, supervisor_id, 'vuelos', 1, jsonb_build_object('zona', zone_name, 'area_ha', '1')),
-    (other_record, first_id, 'malezas', 1, jsonb_build_object('zona', zone_name));
+    (other_record, first_id, 'calidad', 1, jsonb_build_object('zona', zone_name));
   perform set_config('test.admin_id', admin_id::text, true);
   perform set_config('test.first_id', first_id::text, true);
   perform set_config('test.supervisor_id', supervisor_id::text, true);

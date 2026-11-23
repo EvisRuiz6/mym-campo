@@ -108,7 +108,7 @@
         </details>
         <details class="nav-group reviewer-nav" data-menu-group="seguimiento" open hidden>
           <summary>Seguimiento</summary>
-          <button class="nav-item" data-page="seguimiento-lotes"><span class="nav-icon">◷</span> Seguimiento de lotes</button>
+          <button class="nav-item" data-page="seguimiento-lotes" data-admin-only hidden><span class="nav-icon">◷</span> Seguimiento de lotes</button>
           <button class="nav-item" data-page="programacion-semanal"><span class="nav-icon">◷</span> Visitas semanales</button>
         </details>
         <details class="nav-group admin-nav" data-menu-group="administracion" open hidden>
@@ -154,7 +154,7 @@
         </section>
 
         <section id="page-registros" class="page" hidden>
-          <p class="eyebrow">REGISTROS COMPARTIDOS</p><h1>Registros</h1><p class="subtitle">Cada usuario ve sus capturas; el administrador puede consultar las del equipo.</p>
+          <p class="eyebrow">REGISTROS COMPARTIDOS</p><h1>Registros</h1><p class="subtitle">Cada usuario ve sus capturas; administradores y coordinadores pueden consultar las del equipo.</p>
           <p class="record-query-hint">Selecciona “Ver datos” para consultar la información completa de una captura guardada o sincronizada.</p>
           <div class="record-toolbar"><label class="search-field">⌕ <input id="record-search" type="search" placeholder="Buscar por finca, actividad o responsable" aria-label="Buscar registros"></label><button class="secondary-button" data-goto="gestionar" type="button">Administrar capturas</button><button id="open-visit-map" class="secondary-button" type="button" hidden>Mapa de muestreos</button><button id="export-all" class="secondary-button" type="button">Exportar JSON</button></div>
           <div id="all-records" class="record-list"></div>
@@ -263,7 +263,7 @@
         </section>
 
         <section id="page-programacion-semanal" class="page" hidden>
-          <button class="back-link" data-goto="seguimiento-lotes" type="button">← Seguimiento de lotes</button>
+          <button class="back-link" id="weekly-back" data-goto="inicio" type="button">← Inicio</button>
           <p class="eyebrow">PROGRAMACIÓN SEMANAL</p>
           <h1>Visitas agrupadas por semana</h1>
           <p class="subtitle">Consulta los grupos de ruta por semana. Cada visita conserva su fecha programada original y muestra la fecha común asignada al grupo.</p>
@@ -443,6 +443,6 @@
   <script src="config.js"></script>
   <script src="vendor/exceljs-4.4.0.min.js"></script>
   <script src="excel-export.js?v=3"></script>
-  <script src="app.js?v=67"></script>
+  <script src="app.js?v=68"></script>
 </body>
 </html>

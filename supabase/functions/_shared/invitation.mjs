@@ -1,4 +1,4 @@
-export const INVITABLE_ROLES = Object.freeze(['aereo', 'terrestre', 'supervisor', 'admin']);
+export const INVITABLE_ROLES = Object.freeze(['aereo', 'terrestre', 'supervisor', 'coordinador', 'admin']);
 export const NO_EMAIL_AUTH_DOMAIN = 'users.mym-campo.invalid';
 
 export function noEmailAuthAddress(username) {
@@ -99,7 +99,7 @@ export function zonesForRole(role, requestedZones, configuredZones) {
   if (requestedZones.some(zone => !allZones.includes(zone))) {
     throw new Error('La selección contiene una zona que no está configurada.');
   }
-  return ['admin', 'aereo'].includes(role)
+  return ['admin', 'aereo', 'coordinador'].includes(role)
     ? allZones
     : [...new Set(requestedZones)];
 }

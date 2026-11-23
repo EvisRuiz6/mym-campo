@@ -7,13 +7,13 @@ const LOT_LOOKUP_CACHE_KEY = 'mym-campo-lot-lookup:';
 const WORKSPACE_MENU_KEY = 'mym-campo-workspace-menu:';
 const WORKSPACE_PAGES = ['inicio', 'capturar', 'pendientes', 'registros', 'gestionar', 'variacion-vuelo', 'clima-grafica', 'seguimiento-lotes', 'programacion-semanal', 'usuarios', 'exportar-excel'];
 const NO_EMAIL_AUTH_DOMAIN = 'users.mym-campo.invalid';
-const ROLE_OPTIONS = ['aereo', 'terrestre', 'supervisor', 'admin'];
+const ROLE_OPTIONS = ['aereo', 'terrestre', 'supervisor', 'coordinador', 'admin'];
 const modules = {
-  clima: { title: 'Clima', subtitle: 'Ubicación y lecturas de las condiciones de campo.', icon: '☀', group: 'aereo', roles: ['aereo'] },
-  malezas: { title: 'Malezas', subtitle: 'Visita y captura de control por lote.', icon: '⌁', group: 'supervision', roles: ['supervisor'] },
-  epp: { title: 'EPP', subtitle: 'Asistencia y cumplimiento por función y EPP.', icon: '✳', group: 'aereo', roles: ['aereo'] },
-  vuelos: { title: 'Vuelos', subtitle: 'Aplicaciones con dron y consumo por hectárea.', icon: '↗', group: 'aereo', roles: ['aereo'] },
-  calidad: { title: 'Calidad', subtitle: 'Supervisión de Aguilón, Arranque y PC/PM.', icon: '✓', group: 'supervision', roles: ['supervisor'] },
+  clima: { title: 'Clima', subtitle: 'Ubicación y lecturas de las condiciones de campo.', icon: '☀', group: 'aereo', roles: ['aereo', 'coordinador'] },
+  malezas: { title: 'Malezas', subtitle: 'Visita y captura de control por lote.', icon: '⌁', group: 'supervision', roles: ['supervisor', 'coordinador'] },
+  epp: { title: 'EPP', subtitle: 'Asistencia y cumplimiento por función y EPP.', icon: '✳', group: 'aereo', roles: ['aereo', 'coordinador'] },
+  vuelos: { title: 'Vuelos', subtitle: 'Aplicaciones con dron y consumo por hectárea.', icon: '↗', group: 'aereo', roles: ['aereo', 'coordinador'] },
+  calidad: { title: 'Calidad', subtitle: 'Supervisión de Aguilón, Arranque y PC/PM.', icon: '✓', group: 'supervision', roles: ['supervisor', 'coordinador'] },
   variacion_aguilon: { title: 'Variación Aguilón', subtitle: 'Variación de área y mezcla por lote.', icon: '≈', group: 'terrestre', roles: ['terrestre'] },
   calibracion_aguilon: { title: 'Calibraciones Aguilón', subtitle: 'Calibración de equipos de aplicación terrestre.', icon: '◉', group: 'terrestre', roles: ['terrestre'] },
   calibraciones_pcpm: { title: 'Calibraciones PC y PM', subtitle: 'Presión constante, presión manual, foqueo y rondeo.', icon: '⚙', group: 'terrestre', roles: ['terrestre'] }
@@ -586,7 +586,7 @@ function reconcileCloudRecords(remote, user, visibleIds, snapshot) {
       for (const record of local) {
         if (record.syncStatus === 'synced' && !remoteIds.has(record.id) &&
           (record.ownerId === user.id || (!record.ownerId && record.ownerUsername === user.username) ||
-            ['admin', 'supervisor'].includes(user.role))) {
+            ['admin', 'supervisor', 'coordinador'].includes(user.role))) {
           store.delete(record.id);
         }
       }
@@ -1047,7 +1047,7 @@ async function refreshCloudProfile() {
   }
 }
 function roleName(role) {
-  return role === 'admin' ? 'Administrador' : role === 'supervisor' ? 'Supervisor' : role === 'aereo' ? 'Aplicaciones aéreas' : role === 'terrestre' ? 'Aplicaciones terrestres' : 'Pendiente';
+  return role === 'admin' ? 'Administrador' : role === 'coordinador' ? 'Coordinador' : role === 'supervisor' ? 'Supervisor' : role === 'aereo' ? 'Aplicaciones aéreas' : role === 'terrestre' ? 'Aplicaciones terrestres' : 'Pendiente';
 }
 function initials(name) {
   return String(name || '?').trim().split(/\s+/).slice(0, 2).map(part => part[0]).join('').toUpperCase();
@@ -1059,6 +1059,9 @@ function authMessage(id, message) {
 }
 function isActiveAdmin() {
   return !!state.user && state.user.status === 'active' && state.user.role === 'admin';
+}
+function canViewAllRecords() {
+  return !!state.user && state.user.status === 'active' && ['admin', 'coordinador'].includes(state.user.role);
 }
 function canAccessLotFollowup() {
   return !!state.user && state.user.status === 'active' && ['admin', 'supervisor'].includes(state.user.role);
@@ -1102,14 +1105,14 @@ function showAuthScreen(mode) {
 function userCanOpenModule(key) {
   const module = modules[key];
   if (!state.user || !module) return false;
-  const hasZoneScope = ['admin', 'aereo'].includes(state.user.role) || (state.user.allowedZones || []).length > 0;
+  const hasZoneScope = ['admin', 'aereo', 'coordinador'].includes(state.user.role) || (state.user.allowedZones || []).length > 0;
   return hasZoneScope && (state.user.role === 'admin' || module.roles.includes(state.user.role));
 }
 function groupsForRole(role) {
   const groups = [];
-  if (role === 'admin' || role === 'aereo') groups.push({ title: 'Aplicaciones aéreas', keys: Object.keys(modules).filter(key => modules[key].group === 'aereo' && userCanOpenModule(key)) });
+  if (['admin', 'aereo', 'coordinador'].includes(role)) groups.push({ title: 'Aplicaciones aéreas', keys: Object.keys(modules).filter(key => modules[key].group === 'aereo' && userCanOpenModule(key)) });
   if (role === 'admin' || role === 'terrestre') groups.push({ title: 'Aplicaciones terrestres', keys: Object.keys(modules).filter(key => modules[key].group === 'terrestre' && userCanOpenModule(key)) });
-  if (role === 'admin' || role === 'supervisor') groups.push({ title: 'Supervisión', keys: Object.keys(modules).filter(key => modules[key].group === 'supervision' && userCanOpenModule(key)) });
+  if (['admin', 'supervisor', 'coordinador'].includes(role)) groups.push({ title: 'Supervisión', keys: Object.keys(modules).filter(key => modules[key].group === 'supervision' && userCanOpenModule(key)) });
   groups.push({ title: 'Capturas compartidas', keys: Object.keys(modules).filter(key => modules[key].group === 'shared' && userCanOpenModule(key)) });
   return groups.filter(group => group.keys.length);
 }
@@ -1428,7 +1431,7 @@ function flightRecordBelongsToUser(record, user) {
 function flightVariationScopedRecords(records, user) {
   if (!user || user.status !== 'active') return [];
   return records.filter(record => record && record.tipo === 'vuelos' && record.syncStatus !== 'delete-pending' &&
-    (user.role === 'admin' || flightRecordBelongsToUser(record, user)));
+    (user.role === 'admin' || (user.role === 'coordinador' && record.syncStatus === 'synced') || flightRecordBelongsToUser(record, user)));
 }
 function flightReportFilterOptions(records, field) {
   const values = new Map();
@@ -2736,7 +2739,7 @@ const CLIMATE_VARIABLES = Object.freeze({
 function climateScopedRecords(records, user) {
   if (!user || user.status !== 'active') return [];
   return records.filter(record => record && record.tipo === 'clima' && record.syncStatus !== 'delete-pending' &&
-    (user.role === 'admin' || flightRecordBelongsToUser(record, user)));
+    (user.role === 'admin' || (user.role === 'coordinador' && record.syncStatus === 'synced') || flightRecordBelongsToUser(record, user)));
 }
 function climateNumeric(value) {
   if ((typeof value !== 'string' && typeof value !== 'number') || String(value).trim() === '') return null;
@@ -2841,7 +2844,7 @@ function updateClimateOptions() {
     [...owners].sort((a, b) => a[1].localeCompare(b[1], 'es'))
       .map(([key, label]) => '<option value="' + esc(key) + '">' + esc(label) + '</option>').join('');
   owner.value = owners.has(previousOwner) ? previousOwner : '';
-  $('#climate-chart-owner-field').hidden = !isActiveAdmin();
+  $('#climate-chart-owner-field').hidden = !canViewAllRecords();
 }
 function climateReadingLabel(row) {
   return (row.date ? formatDate(row.date) : 'Sin fecha válida') + ' · ' +
@@ -2880,7 +2883,7 @@ function renderClimateChart() {
   const report = climateReadings(records, {
     from: $('#climate-chart-from').value, to: $('#climate-chart-to').value,
     finca: $('#climate-chart-farm').value, zona: $('#climate-chart-zone').value,
-    owner: isActiveAdmin() ? $('#climate-chart-owner').value : ''
+    owner: canViewAllRecords() ? $('#climate-chart-owner').value : ''
   });
   state.climateRows = report.rows;
   const points = report.rows.map((row, index) => ({ row, index, value: climateNumeric(row.values[variableKey]) }))
@@ -2939,7 +2942,7 @@ async function loadClimateChart() {
     const offline = !navigator.onLine || !state.configured;
     const remote = [];
     if (!offline) {
-      const ownerFilter = user.role === 'admin' ? '' : '&owner_id=eq.' + encodeURIComponent(user.id);
+      const ownerFilter = ['admin', 'coordinador'].includes(user.role) ? '' : '&owner_id=eq.' + encodeURIComponent(user.id);
       for (let offset = 0, page; ; offset += 1000) {
         page = await cloudRequest('field_records?tipo=eq.clima' + ownerFilter +
           '&select=id,owner_id,tipo,created_at,schema_version,datos,review_status,reviewed_by,reviewed_at,review_note,profiles!field_records_owner_id_fkey(username,display_name)&order=created_at.desc,id.asc&limit=1000&offset=' + offset);
@@ -2982,7 +2985,7 @@ async function loadClimateChart() {
 function mergeScopedReportRecords(remote, local, user, offline, type = 'vuelos') {
   const scoped = records => !user || user.status !== 'active' ? [] : records.filter(record =>
     record && record.tipo === type && record.syncStatus !== 'delete-pending' &&
-    (user.role === 'admin' || flightRecordBelongsToUser(record, user)));
+    (user.role === 'admin' || (user.role === 'coordinador' && record.syncStatus === 'synced') || flightRecordBelongsToUser(record, user)));
   const cached = scoped(local);
   if (offline) return cached;
   const rows = new Map(scoped(remote).map(record => [record.id, record]));
@@ -3037,7 +3040,7 @@ function updateFlightVariationOptions() {
     [...owners.entries()].sort((a, b) => a[1].localeCompare(b[1], 'es'))
       .map(([key, name]) => '<option value="' + esc(key) + '">' + esc(name) + '</option>').join('');
   owner.value = owners.has(selectedOwner) ? selectedOwner : '';
-  $('#flight-variation-owner-field').hidden = !isActiveAdmin();
+  $('#flight-variation-owner-field').hidden = !canViewAllRecords();
 }
 function renderFlightVariation() {
   const records = flightVariationScopedRecords(state.flightVariationRecords, state.user);
@@ -3045,7 +3048,7 @@ function renderFlightVariation() {
     from: $('#flight-variation-from').value,
     to: $('#flight-variation-to').value,
     labor: $('#flight-variation-labor').value,
-    owner: isActiveAdmin() ? $('#flight-variation-owner').value : ''
+    owner: canViewAllRecords() ? $('#flight-variation-owner').value : ''
   };
   const report = flightReportData(records, filters);
   $('#flight-variation-total').textContent = formatFlightReportNumber(report.totals.hectares) + ' ha';
@@ -3109,7 +3112,7 @@ async function loadFlightVariation() {
     const offline = !navigator.onLine || !state.configured;
     const remote = [];
     if (!offline) {
-      const ownerFilter = user.role === 'admin' ? '' : '&owner_id=eq.' + encodeURIComponent(user.id);
+      const ownerFilter = ['admin', 'coordinador'].includes(user.role) ? '' : '&owner_id=eq.' + encodeURIComponent(user.id);
       for (let offset = 0, page; ; offset += 1000) {
         page = await cloudRequest('field_records?tipo=eq.vuelos' + ownerFilter +
           '&select=id,owner_id,tipo,created_at,schema_version,datos,review_status,reviewed_by,reviewed_at,review_note,profiles!field_records_owner_id_fkey(username,display_name)&order=created_at.desc,id.asc&limit=1000&offset=' + offset);
@@ -4270,7 +4273,7 @@ async function refreshLists() {
   const weeklyGroups = (await getWeeklyVisitOutbox()).filter(group => group.userId === user.id);
   if (!sameOfflineScope(user)) return;
   const records = visibleLocalRecords(localRecords).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  const pending = records.filter(record => record.syncStatus === 'pending');
+  const pending = records.filter(record => record.syncStatus === 'pending' && flightRecordBelongsToUser(record, state.user));
   const queuedDeletions = localRecords.filter(record =>
     record.syncStatus === 'delete-pending' &&
     (record.ownerUsername === state.user.username || isActiveAdmin())
@@ -4364,7 +4367,7 @@ function captureWeedsLocation(root) {
 }
 function renderUsers(users, zones) {
   $('#users-list').innerHTML = users.slice().sort((a, b) => a.display_name.localeCompare(b.display_name, 'es')).map(user =>
-    '<article class="user-row"><span class="user-avatar">' + esc(initials(user.display_name)) + '</span><span class="user-info"><strong>' + esc(user.display_name) + '</strong><small>' + esc((user.email || 'Sin correo') + ' · ' + user.username + ' · ' + (user.status === 'active' ? 'Activa' : user.status === 'suspended' ? 'Suspendida' : 'Pendiente')) + '</small></span><span class="member-actions"><select class="select-input" data-member-role="' + esc(user.id) + '" data-original-role="' + esc(user.role) + '" aria-label="Perfil para ' + esc(user.display_name) + '">' + ROLE_OPTIONS.map(role => '<option value="' + role + '"' + (user.role === role ? ' selected' : '') + '>' + esc(roleName(role)) + '</option>').join('') + '</select></span><details class="member-zone-picker"' + (['admin', 'aereo'].includes(user.role) ? ' hidden' : '') + '><summary>' + (['admin', 'aereo'].includes(user.role) ? 'Todas las zonas' : 'Zonas permitidas (' + (user.allowed_zones || []).length + ')') + '</summary><div class="zone-checkboxes">' + zones.map(zone => '<label><input type="checkbox" data-member-zone="' + esc(user.id) + '" value="' + esc(zone) + '"' + ((user.allowed_zones || []).some(userZone => normalizeZoneValue(userZone).toLowerCase() === normalizeZoneValue(zone).toLowerCase()) ? ' checked' : '') + '> ' + esc(zone) + '</label>').join('') + '</div></details><button class="secondary-button" type="button" data-member-save="' + esc(user.id) + '">Guardar</button>' +
+    '<article class="user-row"><span class="user-avatar">' + esc(initials(user.display_name)) + '</span><span class="user-info"><strong>' + esc(user.display_name) + '</strong><small>' + esc((user.email || 'Sin correo') + ' · ' + user.username + ' · ' + (user.status === 'active' ? 'Activa' : user.status === 'suspended' ? 'Suspendida' : 'Pendiente')) + '</small></span><span class="member-actions"><select class="select-input" data-member-role="' + esc(user.id) + '" data-original-role="' + esc(user.role) + '" aria-label="Perfil para ' + esc(user.display_name) + '">' + ROLE_OPTIONS.map(role => '<option value="' + role + '"' + (user.role === role ? ' selected' : '') + '>' + esc(roleName(role)) + '</option>').join('') + '</select></span><details class="member-zone-picker"' + (['admin', 'aereo', 'coordinador'].includes(user.role) ? ' hidden' : '') + '><summary>' + (['admin', 'aereo', 'coordinador'].includes(user.role) ? 'Todas las zonas' : 'Zonas permitidas (' + (user.allowed_zones || []).length + ')') + '</summary><div class="zone-checkboxes">' + zones.map(zone => '<label><input type="checkbox" data-member-zone="' + esc(user.id) + '" value="' + esc(zone) + '"' + ((user.allowed_zones || []).some(userZone => normalizeZoneValue(userZone).toLowerCase() === normalizeZoneValue(zone).toLowerCase()) ? ' checked' : '') + '> ' + esc(zone) + '</label>').join('') + '</div></details><button class="secondary-button" type="button" data-member-save="' + esc(user.id) + '">Guardar</button>' +
     (user.id === state.user.id ? '' : '<button class="secondary-button member-delete" type="button" data-member-delete="' + esc(user.id) + '" data-member-name="' + esc(user.display_name) + '" aria-label="Eliminar usuario ' + esc(user.display_name) + '">Eliminar</button>') + '</article>'
   ).join('') || emptyState('Aún no hay cuentas.');
 }
@@ -4440,7 +4443,7 @@ function renderZoneCheckboxes(container, zones, selected, attribute) {
 }
 function updateCreateUserZoneVisibility() {
   const role = $('#create-user-role').value;
-  const unrestricted = ['admin', 'aereo'].includes(role);
+  const unrestricted = ['admin', 'aereo', 'coordinador'].includes(role);
   $('#create-user-zone-picker').hidden = unrestricted;
   $('#create-user-zone-policy').textContent = unrestricted
     ? 'Este perfil tiene acceso a todas las zonas.'
@@ -4451,7 +4454,7 @@ function updateCreateUserZoneVisibility() {
 function updateInviteZoneVisibility() {
   const zonePicker = $('#invite-user-zone-picker');
   const role = $('#invite-user-role').value;
-  const unrestricted = ['admin', 'aereo'].includes(role);
+  const unrestricted = ['admin', 'aereo', 'coordinador'].includes(role);
   zonePicker.hidden = unrestricted;
   $('#invite-zone-policy').textContent = unrestricted
     ? 'Este perfil tiene acceso a todas las zonas.'
@@ -4470,7 +4473,7 @@ function userCanAccessZone(zone) {
   const allowedZones = Array.isArray(state.user.allowedZones)
     ? state.user.allowedZones.map(value => normalizeZoneValue(value).toLowerCase())
     : [];
-  return ['admin', 'aereo'].includes(state.user.role) || allowedZones.includes(accessZone);
+  return ['admin', 'aereo', 'coordinador'].includes(state.user.role) || allowedZones.includes(accessZone);
 }
 function invalidLotsInForm(form) {
   const invalidLots = [...form.querySelectorAll('[data-lot-lookup]')]
@@ -4485,7 +4488,7 @@ function invalidLotsInForm(form) {
 }
 function recordHasLotAccess(record) {
   if (!state.user || !record || !record.datos) return false;
-  if (['admin', 'aereo'].includes(state.user.role)) return true;
+  if (['admin', 'aereo', 'coordinador'].includes(state.user.role)) return true;
   const lotCodes = [];
   const zones = [];
   const lotKey = /^(id[\s_]*lote|lote)(\s+\d+)?$/i;
@@ -4855,10 +4858,12 @@ async function fetchAllLotWeeklyPrograms() {
     if (page.length < 1000) return programs;
   }
 }
-async function fetchAllLotFollowupVisits() {
+async function fetchAllLotFollowupVisits(forExport = false) {
   const visits = [];
+  const rpc = forExport && state.user.role === 'coordinador'
+    ? 'get_export_lot_visits' : 'get_lot_followup_visits_with_links';
   for (let offset = 0, page; ; offset += 1000) {
-    page = await cloudRequest('rpc/get_lot_followup_visits_with_links?select=record_id,lot_code,visit_date,cycle_date,visit_number&order=record_id.asc,lot_code.asc&limit=1000&offset=' + offset, {
+    page = await cloudRequest('rpc/' + rpc + '?select=record_id,lot_code,visit_date,cycle_date,visit_number&order=record_id.asc,lot_code.asc&limit=1000&offset=' + offset, {
       method: 'POST',
       body: {}
     });
@@ -5537,10 +5542,13 @@ function renderHome() {
   $('#welcome-user').textContent = state.user.displayName.split(/\s+/)[0];
   $('#active-user').textContent = state.user.displayName;
   $('#active-role').textContent = roleName(state.user.role);
-  $('#open-visit-map').hidden = !['admin', 'supervisor'].includes(state.user.role);
-  $$('.admin-nav').forEach(group => { group.hidden = !isActiveAdmin(); });
+  $('#open-visit-map').hidden = !canAccessLotFollowup();
+  $$('.admin-nav').forEach(group => { group.hidden = !canViewAllRecords(); });
+  $('[data-page="usuarios"]').hidden = !isActiveAdmin();
   $$('[data-admin-only]').forEach(element => { element.hidden = !isActiveAdmin(); });
   $$('.reviewer-nav').forEach(group => { group.hidden = !canAccessLotFollowup(); });
+  $('#weekly-back').dataset.goto = isActiveAdmin() ? 'seguimiento-lotes' : 'inicio';
+  $('#weekly-back').textContent = isActiveAdmin() ? '← Seguimiento de lotes' : '← Inicio';
   $('#invite-user-form').hidden = !isActiveAdmin();
   $('#create-user-form').hidden = !isActiveAdmin();
   resetLotFollowupForm();
@@ -5551,7 +5559,7 @@ function renderHome() {
   $('#lot-weekly-schedule-filter-responsible').value = '';
   populateInviteRoles();
   populateCreateUserRoles();
-  $('#home-subtitle').textContent = state.user.role === 'aereo' ? 'Captura vuelos y datos de apoyo para aplicaciones aéreas.' : state.user.role === 'terrestre' ? 'Captura calibraciones y labores de aplicación terrestre.' : state.user.role === 'supervisor' ? 'Consulta tus capturas y los apartados de Malezas y Calidad.' : 'Administra perfiles y revisa las capturas aéreas y terrestres.';
+  $('#home-subtitle').textContent = state.user.role === 'aereo' ? 'Captura vuelos y datos de apoyo para aplicaciones aéreas.' : state.user.role === 'terrestre' ? 'Captura calibraciones y labores de aplicación terrestre.' : state.user.role === 'supervisor' ? 'Consulta tus capturas y los apartados de Malezas y Calidad.' : state.user.role === 'coordinador' ? 'Captura aplicaciones aéreas y supervisión; consulta y exporta las capturas compartidas.' : 'Administra perfiles y revisa las capturas aéreas y terrestres.';
   refreshLists();
 }
 function workspaceMenuKey() {
@@ -5586,8 +5594,9 @@ function restoreWorkspaceMenu() {
     } else group.open = true;
   });
   const page = WORKSPACE_PAGES.includes(saved.page) ? saved.page : 'inicio';
-  if (['usuarios', 'exportar-excel'].includes(page) && !isActiveAdmin()) return 'inicio';
-  if (['seguimiento-lotes', 'programacion-semanal'].includes(page) && !canAccessLotFollowup()) return 'inicio';
+  if ((page === 'usuarios' && !isActiveAdmin()) || (page === 'exportar-excel' && !canViewAllRecords())) return 'inicio';
+  if (page === 'seguimiento-lotes' && !isActiveAdmin()) return 'inicio';
+  if (page === 'programacion-semanal' && !canAccessLotFollowup()) return 'inicio';
   return page;
 }
 function setMobileMenu(open) {
@@ -5600,8 +5609,9 @@ function setMobileMenu(open) {
 function navigate(page) {
   if (!state.user) return;
   if (!WORKSPACE_PAGES.includes(page)) return;
-  if (['usuarios', 'exportar-excel'].includes(page) && !isActiveAdmin()) { toast('Solo una cuenta administradora activa puede abrir esta pantalla.'); return; }
-  if ((page === 'seguimiento-lotes' || page === 'programacion-semanal') && !canAccessLotFollowup()) { toast('Solo una cuenta administradora o supervisora activa puede consultar el seguimiento de lotes.'); return; }
+  if ((page === 'usuarios' && !isActiveAdmin()) || (page === 'exportar-excel' && !canViewAllRecords())) { toast('No tienes permiso para abrir esta pantalla.'); return; }
+  if (page === 'seguimiento-lotes' && !isActiveAdmin()) { toast('Solo una cuenta administradora activa puede abrir el seguimiento de lotes.'); return; }
+  if (page === 'programacion-semanal' && !canAccessLotFollowup()) { toast('Solo una cuenta administradora o supervisora activa puede consultar las visitas semanales.'); return; }
   if (!state.editingRecord && WORK_CONTEXT_MODULES.includes(state.currentModule) &&
       !saveWorkContextDraft(state.currentModule, false)) {
     toast('No se pudo conservar el contexto de trabajo en este dispositivo.');
@@ -5713,10 +5723,10 @@ async function fetchExcelRecords(selected, isCurrent) {
   }
 }
 async function loadExcelFilterOptions() {
-  if (!isActiveAdmin()) return;
+  if (!canViewAllRecords()) return;
   const userId = state.user.id;
   const sequence = ++excelOptionsSequence;
-  const isCurrent = () => sequence === excelOptionsSequence && isActiveAdmin() && state.user.id === userId;
+  const isCurrent = () => sequence === excelOptionsSequence && canViewAllRecords() && state.user.id === userId;
   const status = $('#excel-options-status');
   const retry = $('#excel-options-retry');
   status.textContent = 'Cargando opciones de las capturas sincronizadas…';
@@ -5747,7 +5757,7 @@ async function loadExcelFilterOptions() {
 }
 async function downloadAdminExcel(event) {
   event.preventDefault();
-  if (!isActiveAdmin()) { toast('Solo una cuenta administradora activa puede exportar capturas.'); return; }
+  if (!canViewAllRecords()) { toast('No tienes permiso para exportar capturas.'); return; }
   const userId = state.user.id;
   const sequence = ++excelExportSequence;
   const button = $('#excel-export-submit');
@@ -5772,14 +5782,14 @@ async function downloadAdminExcel(event) {
   try {
     if (!navigator.onLine || !state.configured) throw new Error('Conéctate al espacio compartido para descargar las capturas.');
     const records = await fetchExcelRecords(selected, () =>
-      sequence === excelExportSequence && isActiveAdmin() && state.user.id === userId);
+      sequence === excelExportSequence && canViewAllRecords() && state.user.id === userId);
     if (!records) return;
-    const visitLinks = selected.includes('malezas') ? await fetchAllLotFollowupVisits() : [];
-    if (sequence !== excelExportSequence || !isActiveAdmin() || state.user.id !== userId) return;
+    const visitLinks = selected.includes('malezas') ? await fetchAllLotFollowupVisits(true) : [];
+    if (sequence !== excelExportSequence || !canViewAllRecords() || state.user.id !== userId) return;
     status.textContent = 'Preparando el archivo Excel…';
     const result = await ExcelExport.createWorkbook(records, selected, filters, modules, { childSchemas, qualityForms }, window.ExcelJS,
       { visitLinks, weedsCatorcenaForDate });
-    if (sequence !== excelExportSequence || !isActiveAdmin() || state.user.id !== userId) return;
+    if (sequence !== excelExportSequence || !canViewAllRecords() || state.user.id !== userId) return;
     const blob = new Blob([result.buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const url = URL.createObjectURL(blob), anchor = document.createElement('a');
     anchor.href = url;
@@ -6013,9 +6023,9 @@ document.addEventListener('change', event => {
   if (!event.target.matches('[data-member-role]')) return;
   const userRow = event.target.closest('.user-row');
   const zonePicker = $('.member-zone-picker', userRow);
-  const unrestricted = ['admin', 'aereo'].includes(event.target.value);
+  const unrestricted = ['admin', 'aereo', 'coordinador'].includes(event.target.value);
   const previousRole = event.target.dataset.originalRole;
-  if (['admin', 'aereo'].includes(previousRole) && !unrestricted) {
+  if (['admin', 'aereo', 'coordinador'].includes(previousRole) && !unrestricted) {
     $$('[data-member-zone]', userRow).forEach(input => { input.checked = false; });
   }
   zonePicker.hidden = unrestricted;
@@ -6028,7 +6038,7 @@ document.addEventListener('change', event => {
   if (!event.target.matches('[data-member-zone]')) return;
   const userRow = event.target.closest('.user-row');
   const roleSelect = $('[data-member-role]', userRow);
-  if (['admin', 'aereo'].includes(roleSelect.value)) return;
+  if (['admin', 'aereo', 'coordinador'].includes(roleSelect.value)) return;
   $('.member-zone-picker summary', userRow).textContent =
     'Zonas permitidas (' + $$('[data-member-zone]:checked', userRow).length + ')';
 });
@@ -6227,7 +6237,7 @@ $('#create-user-form').addEventListener('submit', async event => {
     authMessage('create-user-message', 'Conéctate a internet para crear una cuenta.');
     return;
   }
-  if (!['admin', 'aereo'].includes($('#create-user-role').value) && !state.zonesReady) {
+  if (!['admin', 'aereo', 'coordinador'].includes($('#create-user-role').value) && !state.zonesReady) {
     authMessage('create-user-message', 'Primero carga las zonas permitidas con el botón Reintentar.');
     return;
   }
@@ -6246,7 +6256,7 @@ $('#create-user-form').addEventListener('submit', async event => {
         display_name: $('#create-user-name').value.trim(),
         password: $('#create-user-password').value,
         role: $('#create-user-role').value,
-        allowed_zones: ['admin', 'aereo'].includes($('#create-user-role').value)
+        allowed_zones: ['admin', 'aereo', 'coordinador'].includes($('#create-user-role').value)
           ? []
           : $$('input[name="create_allowed_zones"]:checked', $('#create-user-zone-picker')).map(input => input.value)
       }
@@ -6350,7 +6360,7 @@ $('#invite-user-form').addEventListener('submit', async event => {
     authMessage('invite-user-message', 'Conéctate a internet para enviar una invitación.');
     return;
   }
-  if (!['admin', 'aereo'].includes($('#invite-user-role').value) && !state.zonesReady) {
+  if (!['admin', 'aereo', 'coordinador'].includes($('#invite-user-role').value) && !state.zonesReady) {
     authMessage('invite-user-message', 'Primero carga las zonas permitidas con el botón Reintentar.');
     return;
   }
@@ -6368,7 +6378,7 @@ $('#invite-user-form').addEventListener('submit', async event => {
         username: $('#invite-user-username').value.trim().toLowerCase(),
         display_name: $('#invite-user-name').value.trim(),
         role: $('#invite-user-role').value,
-        allowed_zones: ['admin', 'aereo'].includes($('#invite-user-role').value)
+        allowed_zones: ['admin', 'aereo', 'coordinador'].includes($('#invite-user-role').value)
           ? []
           : $$('input[name="allowed_zones"]:checked', $('#invite-user-zone-picker')).map(input => input.value)
       }
@@ -6397,10 +6407,10 @@ async function saveMemberRole(userId) {
   if (!isActiveAdmin()) throw new Error('Solo un administrador activo puede asignar perfiles.');
   const roleSelect = $$('[data-member-role]').find(item => item.dataset.memberRole === userId);
   if (!roleSelect) throw new Error('No se encontró el perfil seleccionado.');
-  if (!['admin', 'aereo'].includes(roleSelect.value) && !state.zonesReady) {
+  if (!['admin', 'aereo', 'coordinador'].includes(roleSelect.value) && !state.zonesReady) {
     throw new Error('Primero carga las zonas permitidas con el botón Reintentar.');
   }
-  const zones = ['admin', 'aereo'].includes(roleSelect.value) ? [] :
+  const zones = ['admin', 'aereo', 'coordinador'].includes(roleSelect.value) ? [] :
     $$('[data-member-zone]').filter(input => input.dataset.memberZone === userId && input.checked).map(input => input.value);
   await cloudRequest('rpc/set_member_access', {
     method: 'POST',
@@ -6473,6 +6483,7 @@ $('#visit-map-stage').addEventListener('keydown', event => {
 function visibleLocalRecords(records) {
   const scoped = records.filter(record => record.syncStatus !== 'delete-pending' && recordHasLotAccess(record));
   if (isActiveAdmin()) return scoped;
+  if (canViewAllRecords()) return scoped.filter(record => record.syncStatus === 'synced' || flightRecordBelongsToUser(record, state.user));
   return scoped.filter(record => flightRecordBelongsToUser(record, state.user));
 }
 $('#climate-chart-filters').addEventListener('change', renderClimateChart);

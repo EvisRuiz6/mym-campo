@@ -28,7 +28,7 @@ begin
   values
     (private_id, owner_id, 'malezas', 1, jsonb_build_object('ZONA', zone_name, 'FINCA', 'Finca de prueba', 'FECHA', '2026-03-02',
       'subregistros', jsonb_build_object('malezas_detalle', jsonb_build_array(jsonb_build_object('LOTE', test_lot, 'FECHA', '2026-03-02', 'LABOR', 'Soca'))))),
-    (own_id, supervisor_id, 'malezas', 1, jsonb_build_object('ZONA', zone_name));
+    (own_id, supervisor_id, 'calidad', 1, jsonb_build_object('ZONA', zone_name));
   perform set_config('test.privacy_admin', admin_id::text, true);
   perform set_config('test.privacy_supervisor', supervisor_id::text, true);
   perform set_config('test.privacy_private', private_id::text, true);

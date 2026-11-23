@@ -42,7 +42,6 @@ const qualityForms = {
   aguilon: {
     label: 'F.C. AGUILÓN',
     fields: [
-      { label: 'FECHA', key: 'FECHA', type: 'date', value: localDate(), required: true },
       { label: 'Equipo de Aplicación', key: 'Equipo de Aplicación' },
       { label: 'Nombre del Caporal', key: 'Nombre del Caporal' },
       { label: 'Nombre del Tractorista', key: 'Nombre del Tractorista' },
@@ -64,25 +63,23 @@ const qualityForms = {
       { label: '¿El Sistema de iluminación está en buen estado?', key: '¿El Sistema de iluminación está en buen estado?', type: 'select', options: [{ label: 'Sí', value: 'TRUE' }, { label: 'No', value: 'FALSE' }] },
       { label: '¿El personal está usando EPP en buen estado?', key: '¿El personal está usando EPP en buen estado?', type: 'select', options: [{ label: 'Sí', value: 'TRUE' }, { label: 'No', value: 'FALSE' }] },
       { label: 'Observaciones Generales', key: 'Observaciones Generales', type: 'textarea', full: true },
-      { label: 'IMAGEN', key: 'IMAGEN', type: 'file', accept: 'image/*', full: true }
+      { label: 'IMÁGENES', key: 'IMAGEN', type: 'file', accept: 'image/*', multiple: true, full: true }
     ]
   },
   arranque: {
     label: 'F.C. ARRANQUE',
     fields: [
-      { label: 'FECHA', key: 'FECHA', type: 'date', value: localDate(), required: true },
       { label: 'Días después del corte/siembra (Edad del cultivo)', key: 'Días después del corte/siembra (Edad del cultivo)', type: 'number', step: '1' },
       { label: '¿Existe Maleza con altura mayor a 15 cm en área ya arrancada?', key: '¿Existe Maleza con altura mayor a 15 cm en área ya arrancada?', type: 'select', options: [{ label: 'Sí', value: 'TRUE' }, { label: 'No', value: 'FALSE' }] },
       { label: '¿Existen Malezas con flor?', key: '¿Existen Malezas con flor?', type: 'select', options: [{ label: 'Sí', value: 'TRUE' }, { label: 'No', value: 'FALSE' }] },
       { label: 'Se esta utilizando machete', key: 'Se esta utilizando machete', type: 'select', options: [{ label: 'Sí', value: 'TRUE' }, { label: 'No', value: 'FALSE' }] },
       { label: 'Observaciones Generales', key: 'Observaciones Generales', type: 'textarea', full: true },
-      { label: 'IMAGEN', key: 'IMAGEN', type: 'file', accept: 'image/*', full: true }
+      { label: 'IMÁGENES', key: 'IMAGEN', type: 'file', accept: 'image/*', multiple: true, full: true }
     ]
   },
   pcpm: {
     label: 'F.C. PC Y PM',
     fields: [
-      { label: 'FECHA', key: 'FECHA', type: 'date', value: localDate(), required: true },
       { label: 'Equipo de Aplicación', key: 'Equipo de Aplicación' },
       { label: 'Código del Caporal', key: 'Código del Caporal' },
       { label: 'Nombre del Caporal', key: 'Nombre del Caporal' },
@@ -102,7 +99,7 @@ const qualityForms = {
       { label: 'Horario Fin Supervisión', key: 'Horario Fin Supervisión', type: 'time' },
       { label: '¿El personal está usando EPP en buen estado?', key: '¿El personal está usando EPP en buen estado?', type: 'select', options: [{ label: 'Sí', value: 'TRUE' }, { label: 'No', value: 'FALSE' }] },
       { label: 'Observaciones Generales', key: 'Observaciones Generales', type: 'textarea', full: true },
-      { label: 'IMAGEN', key: 'IMAGEN', type: 'file', accept: 'image/*', full: true }
+      { label: 'IMÁGENES', key: 'IMAGEN', type: 'file', accept: 'image/*', multiple: true, full: true }
     ]
   }
 };
@@ -1596,7 +1593,13 @@ function flightFields() {
     fieldMarkup({ label: 'Observaciones', name: 'observaciones', type: 'textarea' }, 'f-notes', true) + '</div></section>';
 }
 function qualityFields() {
-  return '<section class="form-section"><h2>Supervisión de calidad</h2><div class="field-grid">' +
+  return '<section class="form-section"><h2>Ubicación del lote</h2><div class="field-grid">' +
+    fieldMarkup({ label: 'Fecha de la visita', name: 'FECHA', type: 'date', value: localDate(), required: true }, 'quality-date', true) +
+    fieldMarkup({ label: 'Lote', name: 'lote', lotLookup: true }, 'quality-lot', true) +
+    fieldMarkup({ label: 'Finca', name: 'finca', placeholder: 'Se completa al ingresar un lote', locationTarget: 'finca' }, 'quality-farm', true) +
+    fieldMarkup({ label: 'Zona', name: 'zona', placeholder: 'Se completa al ingresar un lote', locationTarget: 'zona' }, 'quality-zone', true) +
+    '<div class="field full"><div class="field-hint" data-lot-location-status role="status">Ingresa un lote para completar finca y zona.</div></div></div></section>' +
+    '<section class="form-section"><h2>Supervisión de calidad</h2><div class="field-grid">' +
     fieldMarkup({ label: 'Formulario', name: 'calidad_tipo', type: 'select', required: true, options: Object.entries(qualityForms).map(([value, form]) => ({ value, label: form.label })) }, 'quality-type', true) +
     '</div><div id="quality-details"><p class="field-hint">Selecciona F.C. Aguilón, F.C. Arranque o F.C. PC y PM para abrir sus campos originales.</p></div></section>';
 }
@@ -1933,12 +1936,17 @@ async function serializeForm(form, recordId, previousData, moduleKey) {
   const data = previousData && typeof previousData === 'object' && !Array.isArray(previousData)
     ? { ...previousData }
     : {};
+  const multipleFiles = new Map($$('input[type="file"][multiple][name]', form).map(input => [input.name, input]));
   for (const [key, value] of new FormData(form).entries()) {
+    if (multipleFiles.has(key)) continue;
     if (typeof File !== 'undefined' && value instanceof File) {
       data[key] = await attachment(value) || (previousData && previousData[key]) || null;
     } else {
       data[key] = value;
     }
+  }
+  for (const [key, input] of multipleFiles) {
+    data[key] = await attachments(input.files) || (previousData && previousData[key]) || null;
   }
   if (moduleKey === 'clima') {
     data.lecturas = $$('.repeat-row', $('#weather-rows')).map(row =>
@@ -6073,7 +6081,7 @@ $('#capture-form').addEventListener('change', event => {
 $('#form-fields').addEventListener('change', event => {
   if (event.target.id === 'pcpm-labor') renderPcpmDetails(event.target.value);
   if (event.target.id === 'ag-tipo-aguilon') renderAguilonDetails(event.target.value);
-  if (event.target.id === 'quality-type') renderQualityDetails(event.target.value);
+  if (event.target.name === 'calidad_tipo' && state.currentModule === 'calidad') renderQualityDetails(event.target.value);
 });
 $('#capture-form').addEventListener('submit', async event => {
   event.preventDefault();

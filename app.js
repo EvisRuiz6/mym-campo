@@ -5766,8 +5766,11 @@ async function downloadAdminExcel(event) {
     const records = await fetchExcelRecords(selected, () =>
       sequence === excelExportSequence && isActiveAdmin() && state.user.id === userId);
     if (!records) return;
+    const visitLinks = selected.includes('malezas') ? await fetchAllLotFollowupVisits() : [];
+    if (sequence !== excelExportSequence || !isActiveAdmin() || state.user.id !== userId) return;
     status.textContent = 'Preparando el archivo Excel…';
-    const result = await ExcelExport.createWorkbook(records, selected, filters, modules, { childSchemas, qualityForms }, window.ExcelJS);
+    const result = await ExcelExport.createWorkbook(records, selected, filters, modules, { childSchemas, qualityForms }, window.ExcelJS,
+      { visitLinks, weedsCatorcenaForDate });
     if (sequence !== excelExportSequence || !isActiveAdmin() || state.user.id !== userId) return;
     const blob = new Blob([result.buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const url = URL.createObjectURL(blob), anchor = document.createElement('a');

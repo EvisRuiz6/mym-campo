@@ -146,13 +146,94 @@ const ExcelExport = (() => {
       }
     } else put(path.join(' · '), result);
   }
-  async function createWorkbook(records, selectedModules, filters, definitions, schemas, ExcelJS) {
+  function malezasLotCode(value) {
+    const code = scalar(value);
+    return /^\d{1,7}$/.test(code) ? code.padStart(7, '0') : code;
+  }
+  function writeMalezasSheet(workbook, rows, links, calendar) {
+    const headers = ['ID', 'UBICACIÓN', 'RESPONSABLE', 'ZONA', 'PERIODO', 'FECHA', 'CATORCENA',
+      'FINCA', 'LOTE', 'FECHA DE CORTE O SIEMBRA', 'LABOR', 'DIA DE EVALUACIÓN',
+      '% CONTROL', '% COBERTURA', 'OBSERVACIONES'];
+    if (rows.length > 1048570) throw new Error('La exportación supera los límites de Excel; reduce los filtros.');
+    const cycles = new Map();
+    for (const link of links) {
+      const date = dateValue(link.cycle_date);
+      if (!date) continue;
+      const key = String(link.record_id) + ':' + malezasLotCode(link.lot_code);
+      if (cycles.has(key) && cycles.get(key) !== date) {
+        throw new Error('Una visita tiene fechas de ciclo contradictorias; revisa sus vínculos antes de exportar.');
+      }
+      cycles.set(key, date);
+    }
+    const sheet = workbook.addWorksheet('Visita Malezas', { views: [{ state: 'frozen', ySplit: 6 }] });
+    for (const [row, title] of [
+      [1, 'INGENIO MADRE TIERRA'],
+      [2, 'DEPTO. CONTROL DE MALEZAS Y MADURANTES'],
+      [3, 'Evaluación de la Efectividad Control de Malezas']
+    ]) {
+      sheet.mergeCells(row, 1, row, headers.length);
+      const cell = sheet.getCell(row, 1);
+      cell.value = title;
+      cell.font = { bold: true, size: row === 1 ? 14 : 11 };
+      cell.alignment = { horizontal: 'center' };
+    }
+    sheet.getRow(6).values = headers;
+    sheet.getRow(6).font = { bold: true };
+    sheet.getRow(6).alignment = { vertical: 'middle', wrapText: true };
+    sheet.getRow(6).height = 30;
+    sheet.columns.forEach((column, i) => { column.width = [38, 24, 25, 12, 12, 15, 14, 24, 14, 24, 15, 20, 15, 17, 42][i]; });
+    sheet.autoFilter = { from: { row: 6, column: 1 }, to: { row: 6, column: headers.length } };
+    for (const item of rows) {
+      const data = item.record.datos;
+      const detail = item.data.subregistros && item.data.subregistros.malezas_detalle || data;
+      const lot = malezasLotCode(firstValue(detail, ['LOTE', 'lote']));
+      const visitDate = dateValue(firstValue(detail, ['FECHA', 'fecha']) || firstValue(data, ['FECHA', 'fecha']));
+      const cycleDate = cycles.get(String(item.record.id) + ':' + lot) || '';
+      const period = visitDate && calendar ? calendar(visitDate) : null;
+      const percent = key => {
+        const value = firstValue(detail, [key]);
+        if (!value) return null;
+        const number = Number(value.replace(',', '.'));
+        if (!Number.isFinite(number) || number < 0 || number > 100) {
+          throw new Error('El lote ' + lot + ' tiene un valor inválido de ' + key + '.');
+        }
+        return number / 100;
+      };
+      const control = percent('% CONTROL');
+      const savedCoverage = percent('% COBERTURA');
+      const coverage = savedCoverage === null && control !== null ? 1 - control : savedCoverage;
+      const values = [
+        item.record.id, firstValue(data, ['UBICACIÓN', 'ubicacion']), firstValue(data, ['RESPONSABLE', 'responsable']),
+        firstValue(data, ['ZONA', 'zona']), period ? Number(period.period) : null,
+        visitDate ? new Date(visitDate + 'T00:00:00Z') : null,
+        Number(firstValue(detail, ['CATORCENA', 'catorcena'])) || (period ? period.number : null),
+        firstValue(data, ['FINCA', 'finca']), lot,
+        cycleDate ? new Date(cycleDate + 'T00:00:00Z') : null,
+        firstValue(detail, ['LABOR', 'labor']),
+        visitDate && cycleDate ? (Date.parse(visitDate + 'T00:00:00Z') - Date.parse(cycleDate + 'T00:00:00Z')) / 86400000 : null,
+        control, coverage, firstValue(detail, ['OBSERVACIONES', 'observaciones'])
+      ];
+      for (const value of values) {
+        if (typeof value === 'string' && (value.length > 32767 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]/.test(value))) {
+          throw new Error('Un valor de Malezas supera los límites de Excel o contiene caracteres no admitidos.');
+        }
+      }
+      const row = sheet.addRow(values);
+      for (const col of [6, 10]) row.getCell(col).numFmt = 'dd/mm/yyyy';
+      for (const col of [13, 14]) row.getCell(col).numFmt = '0.00%';
+    }
+  }
+  async function createWorkbook(records, selectedModules, filters, definitions, schemas, ExcelJS, options = {}) {
     if (!ExcelJS || !ExcelJS.Workbook) throw new Error('No se pudo cargar el componente de Excel.');
     const fields = typedFields(schemas.childSchemas, schemas.qualityForms);
     const workbook = new ExcelJS.Workbook();
     let totalRows = 0;
     for (const type of selectedModules) {
       if (!definitions[type]) throw new Error('El módulo seleccionado no es válido.');
+      if (type === 'malezas') {
+        const malezasRows = records.filter(record => record.tipo === type).flatMap(record => matchingRows(record, filters));
+        writeMalezasSheet(workbook, malezasRows, options.visitLinks || [], options.weedsCatorcenaForDate);
+      }
       const sheet = workbook.addWorksheet(definitions[type].title.slice(0, 31), { views: [{ state: 'frozen', ySplit: 1 }] });
       const rows = [];
       const columns = new Set(['ID de captura', 'Usuario', 'Nombre', 'Fecha de creación (UTC)', 'Versión', 'Estado de revisión', 'Revisado por', 'Fecha de revisión (UTC)', 'Nota de revisión', 'Número de detalle']);

@@ -63,7 +63,7 @@ test('writes a real workbook with separate sheets, typed cells, detail rows and 
   assert.equal(Buffer.from(result.buffer).subarray(0, 2).toString(), 'PK');
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(result.buffer);
-  assert.deepEqual(workbook.worksheets.map(sheet => sheet.name), ['Vuelos', 'Clima', 'Malezas']);
+  assert.deepEqual(workbook.worksheets.map(sheet => sheet.name), ['Vuelos', 'Clima', 'Visita Malezas', 'Malezas']);
   const values = sheet => {
     const header = sheet.getRow(1).values;
     return Object.fromEntries(header.slice(1).map((name, i) => [name, sheet.getRow(2).getCell(i + 1)]));
@@ -83,6 +83,46 @@ test('writes a real workbook with separate sheets, typed cells, detail rows and 
   assert.equal(weeds['Datos · Subregistros · Malezas detalle · % CONTROL'].value, 55.5);
   assert.equal(weeds['Datos · Subregistros · Malezas detalle · IMAGEN · 1 · Name'].value, 'foto.jpg');
   assert.ok(!Object.keys(weeds).some(key => /dataUrl/i.test(key)));
+});
+
+test('exports filtered Malezas in the reference layout with correct cycle dates and percentages', async () => {
+  const records = [record('visit-1', 'malezas', {
+    FECHA: '2026-03-01', UBICACIÓN: '14, -91', RESPONSABLE: 'Ana', ZONA: '01', FINCA: 'F',
+    subregistros: { malezas_detalle: [
+      { FECHA: '2026-03-01', LOTE: '0000017', LABOR: 'Soca', '% CONTROL': '98', '% COBERTURA': '2', CATORCENA: '10', OBSERVACIONES: 'Primera' },
+      { FECHA: '2026-03-02', LOTE: '0000018', LABOR: 'Plantilla', '% CONTROL': '0', OBSERVACIONES: 'Segunda' }
+    ] }
+  })];
+  const links = [{ record_id: 'visit-1', lot_code: '17', cycle_date: '2026-01-17' }];
+  const calendar = date => date === '2026-03-01' ? { period: '30', number: 10 } : null;
+  const { buffer, totalRows } = await exportExcel.createWorkbook(records, ['malezas'], {},
+    modules, schemas, ExcelJS, { visitLinks: links, weedsCatorcenaForDate: calendar });
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  const sheet = workbook.getWorksheet('Visita Malezas');
+  assert.equal(totalRows, 2);
+  assert.deepEqual(sheet.getRow(6).values.slice(1), ['ID', 'UBICACIÓN', 'RESPONSABLE', 'ZONA', 'PERIODO',
+    'FECHA', 'CATORCENA', 'FINCA', 'LOTE', 'FECHA DE CORTE O SIEMBRA', 'LABOR',
+    'DIA DE EVALUACIÓN', '% CONTROL', '% COBERTURA', 'OBSERVACIONES']);
+  assert.equal(sheet.getCell('A1').value, 'INGENIO MADRE TIERRA');
+  assert.equal(sheet.getCell('I7').value, '0000017');
+  assert.equal(sheet.getCell('E7').value, 30);
+  assert.equal(sheet.getCell('J7').value.toISOString().slice(0, 10), '2026-01-17');
+  assert.equal(sheet.getCell('L7').value, 43);
+  assert.equal(sheet.getCell('M7').value, 0.98);
+  assert.equal(sheet.getCell('N7').value, 0.02);
+  assert.equal(sheet.getCell('M7').numFmt, '0.00%');
+  assert.equal(sheet.getCell('I8').value, '0000018');
+  assert.equal(sheet.getCell('J8').value, null);
+  assert.equal(sheet.getCell('L8').value, null);
+  assert.equal(sheet.getCell('M8').value, 0);
+  assert.equal(sheet.getCell('N8').value, 1);
+  const filtered = await exportExcel.createWorkbook(records, ['malezas'], { labor: 'Soca' },
+    modules, schemas, ExcelJS, { visitLinks: links, weedsCatorcenaForDate: calendar });
+  assert.equal(filtered.totalRows, 1);
+  await assert.rejects(() => exportExcel.createWorkbook([record('bad', 'malezas', {
+    subregistros: { malezas_detalle: [{ LOTE: '0000017', '% CONTROL': '101' }] }
+  })], ['malezas'], {}, modules, schemas, ExcelJS), /valor inválido de % CONTROL/);
 });
 
 test('retains long text, rejects ambiguous columns and keeps numeric identifiers as text', async () => {
@@ -117,7 +157,7 @@ test('paginates server records and reports failures without producing a partial 
   const calls = [];
   let downloaded = 0, fail = false, produced = 0;
   const context = {
-    state, modules, childSchemas: {}, qualityForms: {}, navigator: { onLine: true },
+    state, modules, childSchemas: {}, qualityForms: {}, navigator: { onLine: true }, weedsCatorcenaForDate() {},
     isActiveAdmin: () => true, $: selector => controls[selector],
     $$: () => [{ value: 'vuelos' }], console: { error() {} },
     ExcelExport: { dateValue: exportExcel.dateValue, createWorkbook: async records => {
@@ -146,6 +186,37 @@ test('paginates server records and reports failures without producing a partial 
   await run({ preventDefault() {} });
   assert.equal(downloaded, 1);
   assert.equal(controls['#excel-export-submit'].disabled, false);
+  assert.match(controls['#excel-export-status'].textContent, /No se pudo descargar Excel.*red interrumpida/);
+});
+
+test('requires linked visit data before downloading Malezas and reports lookup failures', async () => {
+  const start = source.indexOf('let excelExportSequence = 0;');
+  const end = source.indexOf('\nfunction handleCloudError(', start);
+  const controls = Object.fromEntries(['submit', 'status', 'modules'].map(key => ['#excel-export-' + key, {}]));
+  for (const key of ['from', 'to', 'farm', 'zone', 'labor', 'owner']) controls['#excel-' + key] = { value: '' };
+  const links = [{ record_id: 'm1', lot_code: '0000017', cycle_date: '2026-01-17' }];
+  let fail = false, downloaded = 0, passedLinks;
+  const run = runInNewContext(source.slice(start, end) + '\ndownloadAdminExcel', {
+    state: { user: { id: 'admin' }, configured: true }, modules, childSchemas: {}, qualityForms: {},
+    navigator: { onLine: true }, isActiveAdmin: () => true, $: selector => controls[selector],
+    $$: () => [{ value: 'malezas' }], console: { error() {} },
+    fetchAllLotFollowupVisits: async () => { if (fail) throw new Error('red interrumpida'); return links; },
+    weedsCatorcenaForDate() {},
+    ExcelExport: { dateValue: exportExcel.dateValue, createWorkbook: async (...args) => {
+      passedLinks = args[6].visitLinks;
+      return { buffer: new Uint8Array([1]), totalRows: 1 };
+    } },
+    window: { ExcelJS: {} }, Blob,
+    URL: { createObjectURL: () => 'blob:example', revokeObjectURL() {} },
+    document: { createElement: () => ({ click() { downloaded++; } }) },
+    setTimeout() {}, localDate: () => '2026-03-01', cloudRequest: async () => []
+  });
+  await run({ preventDefault() {} });
+  assert.equal(passedLinks, links);
+  assert.equal(downloaded, 1);
+  fail = true;
+  await run({ preventDefault() {} });
+  assert.equal(downloaded, 1);
   assert.match(controls['#excel-export-status'].textContent, /No se pudo descargar Excel.*red interrumpida/);
 });
 

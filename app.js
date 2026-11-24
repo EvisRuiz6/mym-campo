@@ -5889,6 +5889,12 @@ async function endSession() {
   $('#capture-submit').textContent = 'Guardar captura';
   showAuthScreen('login');
 }
+function registerWebServiceWorker() {
+  const isNativeApp = window.Capacitor && window.Capacitor.isNativePlatform();
+  if ('serviceWorker' in navigator && location.protocol.startsWith('http') && !isNativeApp) {
+    navigator.serviceWorker.register('./service-worker.js').catch(error => console.warn('No se pudo activar el modo sin conexión', error));
+  }
+}
 $$('[data-menu-group]').forEach(group => group.addEventListener('toggle', () => saveWorkspaceMenu()));
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && $('#workspace-menu').classList.contains('mobile-open')) {
@@ -6703,6 +6709,6 @@ async function init() {
     showAuthScreen('login');
     authMessage('login-error', 'No se pudo abrir el almacenamiento local. Usa HTTPS o localhost y vuelve a abrir la app.');
   }
-  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('./service-worker.js').catch(error => console.warn('No se pudo activar el modo sin conexión', error));
+  registerWebServiceWorker();
 }
 init();

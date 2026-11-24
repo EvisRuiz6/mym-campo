@@ -1,0 +1,8 @@
+{
+  "appId": "com.evisruiz.mymcampo",
+  "appName": "MyM Campo",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https"
+  }
+}

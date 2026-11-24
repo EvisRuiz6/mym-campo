@@ -1,4 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192">
-  <rect width="192" height="192" rx="42" fill="#174b38"/>
-  <path d="M38 145V49h27l31 42 31-42h27v96h-27V89l-31 42-31-42v56z" fill="#fff"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 450 450" role="img" aria-labelledby="title desc">
+  <title id="title">MyM Campo</title>
+  <desc id="desc">Monograma MyM con hoja de caña y surcos de cultivo.</desc>
+  <rect width="450" height="450" rx="104" fill="#173f32"/>
+  <path d="M82 341V119h47l96 125 96-125h47v222h-61V215l-82 103-82-103v126Z" fill="#f7f5eb"/>
+  <path d="M312 105c26-45 68-60 113-57-3 44-25 82-72 96-20 6-39 4-56-1 1-14 5-26 15-38Z" fill="#8bbe4d"/>
+  <path d="M310 164c27-24 58-41 93-51" fill="none" stroke="#173f32" stroke-width="8" stroke-linecap="round"/>
+  <path d="M102 382q123-47 246 0M131 408q94-33 188 0" fill="none" stroke="#8bbe4d" stroke-width="10" stroke-linecap="round"/>
 </svg>

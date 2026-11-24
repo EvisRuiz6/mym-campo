@@ -18,7 +18,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .app-shell { min-height: 100dvh; }
 .topbar { height: 76px; background: var(--white); border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; padding: 0 34px; position: sticky; top: 0; z-index: 5; }
 .brand { display: flex; align-items: center; gap: 12px; text-decoration: none; color: var(--ink); }
-.brand-mark { height: 38px; width: 38px; border-radius: 12px; background: var(--forest); color: white; display: grid; place-items: center; font-size: 20px; font-weight: 800; }
+.brand-mark { height: 38px; width: 38px; border-radius: 12px; display: block; object-fit: cover; }
 .brand strong, .brand small { display: block; }
 .brand strong { font-size: 15px; }
 .brand small { color: var(--muted); font-size: 11px; margin-top: 2px; }
@@ -452,10 +452,8 @@ dialog::backdrop { background: #17241c88; }
 #auth-screen[hidden], #app-shell[hidden], .page[hidden], [hidden] { display: none !important; }
 .auth-screen { min-height: 100dvh; display: grid; place-items: center; padding: 24px; background: radial-gradient(circle at top, #e8f1e9, var(--paper) 58%); }
 .auth-card { width: min(100%, 490px); padding: 30px; background: var(--white); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); }
-.auth-brand { display: flex; align-items: center; gap: 12px; margin-bottom: 30px; }
-.auth-brand strong, .auth-brand small { display: block; }
-.auth-brand strong { font-size: 16px; }
-.auth-brand small { color: var(--muted); font-size: 12px; margin-top: 3px; }
+.auth-brand { margin-bottom: 24px; }
+.auth-brand-logo { display: block; width: 100%; height: auto; }
 .auth-card h1 { font-size: 27px; }
 .auth-form { display: grid; gap: 8px; margin-top: 22px; }
 .auth-form .field-label { margin-top: 5px; }

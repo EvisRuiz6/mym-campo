@@ -27,6 +27,8 @@ jobs:
         run: npm run build:web
       - name: Crear proyecto Android
         run: npx cap add android
+      - name: Configurar logo de caña
+        run: node scripts/configure-android.mjs
       - name: Sincronizar archivos de la app
         run: npx cap sync android
       - name: Construir APK interno

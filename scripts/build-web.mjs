@@ -13,6 +13,7 @@ const files = [
   'manifest.json',
   'service-worker.js',
   'icon.svg',
+  'brand-lockup.svg',
   'vendor/exceljs-4.4.0.min.js'
 ];
 

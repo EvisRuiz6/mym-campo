@@ -3,16 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#174b38">
+  <meta name="theme-color" content="#173f32">
   <meta name="description" content="Captura de labores aéreas y terrestres para MyM Data">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="app.css?v=29">
+  <link rel="stylesheet" href="app.css?v=30">
   <title>MyM Campo</title>
 </head>
 <body>
   <main id="auth-screen" class="auth-screen">
     <section class="auth-card" aria-labelledby="auth-title">
-      <div class="auth-brand"><span class="brand-mark">M</span><div><strong>MyM Campo</strong><small>Aplicaciones aéreas y terrestres</small></div></div>
+      <div class="auth-brand"><img class="auth-brand-logo" src="brand-lockup.svg" alt="MyM Campo, control de malezas y madurantes. Aplicaciones aéreas y terrestres."></div>
       <div id="auth-config-warning" class="status-strip warning-strip" hidden>
         <span class="status-check">!</span>
         <div><strong>Falta conectar el espacio compartido</strong><small>Configura la URL y la clave pública de Supabase siguiendo el README. No uses una clave service_role en el navegador.</small></div>
@@ -76,8 +77,8 @@
   <div id="app-shell" class="app-shell" hidden>
     <header class="topbar">
       <a class="brand" href="#inicio" data-goto="inicio" aria-label="MyM Campo, inicio">
-        <span class="brand-mark" aria-hidden="true">M</span>
-        <span><strong>MyM Campo</strong><small>Control de malezas y madurantes</small></span>
+        <img class="brand-mark" src="icon.svg" alt="">
+        <span><strong>MyM Campo</strong><small>Aplicaciones aéreas y terrestres</small></span>
       </a>
       <div class="top-actions">
         <span id="connection-state" class="connection"><i></i><span>Preparando…</span></span>

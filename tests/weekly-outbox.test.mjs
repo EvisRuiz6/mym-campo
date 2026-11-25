@@ -39,6 +39,14 @@ test('confirms the whole group before removing it and sends stable identities', 
   assert.deepEqual(h.calls[0].options.body.p_captures.map(item => item.record_id), ['a', 'b']);
 });
 
+test('preserves visit number zero when synchronizing a queued group', async () => {
+  const group = makeGroup();
+  group.captures[0].visit_number = 0;
+  const h = harness([group], async () => ['a', 'b']);
+  await h.sync(user);
+  assert.equal(h.calls[0].options.body.p_captures[0].visit_number, 0);
+});
+
 test('retains the original group on network failure or incomplete confirmation', async () => {
   for (const request of [
     async () => { throw Object.assign(new Error('red'), { connectionFailure: true }); },

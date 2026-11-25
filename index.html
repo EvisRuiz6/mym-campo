@@ -231,6 +231,7 @@
               </div>
               <div class="lot-followup-date-editor">
                 <div class="section-heading"><div><p class="eyebrow">VISITAS PROGRAMADAS</p><h3>Fechas de visita</h3></div></div>
+                <div class="field"><label class="field-label" for="lot-followup-date-zero">VISITA 0 (opcional)</label><input id="lot-followup-date-zero" class="small-input" type="date"></div>
                 <div id="lot-followup-date-inputs"></div>
                 <button id="lot-followup-add-date" class="add-row" type="button">＋ Agregar fecha de visita</button>
               </div>
@@ -254,7 +255,7 @@
             <button id="lot-followup-refresh" class="secondary-button" type="button">Actualizar</button>
             <label class="secondary-button lot-followup-import-button" for="lot-followup-import" data-admin-only hidden>Importar Excel<input id="lot-followup-import" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden></label>
           </div>
-          <p class="record-query-hint" data-admin-only hidden>El archivo debe incluir FECHA SIEMBRA/CORTE, FINCA, LOTE, ESTADO, RESPONSABLE y las fechas VISITA 1, VISITA 2, VISITA 3. La importación procesa la primera hoja.</p>
+          <p class="record-query-hint" data-admin-only hidden>El archivo debe incluir FECHA SIEMBRA/CORTE, FINCA, LOTE, ESTADO, RESPONSABLE y las fechas VISITA 1, VISITA 2, etc.; VISITA 0 es opcional. Se admiten hasta cinco visitas en total. La importación procesa la primera hoja.</p>
           <div class="lot-followup-table-wrap">
             <table class="lot-followup-table">
               <thead><tr><th>Finca / lote</th><th>Siembra / corte</th><th>Estado</th><th>Responsable</th><th>Visitas</th><th>Próxima visita</th><th>Seguimiento</th><th>Acciones</th></tr></thead>
@@ -444,6 +445,6 @@
   <script src="config.js"></script>
   <script src="vendor/exceljs-4.4.0.min.js"></script>
   <script src="excel-export.js?v=3"></script>
-  <script src="app.js?v=70"></script>
+  <script src="app.js?v=71"></script>
 </body>
 </html>

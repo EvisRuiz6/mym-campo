@@ -123,6 +123,36 @@ test('allows five scheduled dates and rejects a sixth actual date', () => {
   assert.ok(helpers.parseLotFollowupRows([headers, row]).errors.some(error => error.includes('máximo cinco')));
 });
 
+test('imports visit zero separately without renumbering later visits', () => {
+  const headers = ['FECHA SIEMBRA/CORTE', 'FINCA', 'LOTE', 'ESTADO', 'RESPONSABLE',
+    'VISITA 0', 'VISITA 1', 'VISITA 2', 'VISITA 3', 'VISITA 4', 'VISITA 5'];
+  const row = ['2026-11-11', 'F', '17', 'Soca', 'Ana', '2026-11-26',
+    '2026-12-11', '2027-01-10', '2027-02-09', '2027-03-09', ''];
+  const result = helpers.parseLotFollowupRows([headers, row]);
+  assert.equal(result.errors.length, 0);
+  assert.equal(result.plans[0].visit_zero_date, '2026-11-26');
+  assert.equal(result.plans[0].visit_dates[0], '2026-12-11');
+  row[10] = '2027-04-09';
+  assert.ok(helpers.parseLotFollowupRows([headers, row]).errors.some(error => error.includes('máximo cinco')));
+  row[5] = '';
+  assert.equal(helpers.parseLotFollowupRows([headers, row]).errors.length, 0);
+});
+
+test('keeps numbered and historical visits in the correct slots when visit zero is present', () => {
+  const plan = { lot_code: '17', cycle_date: '2026-01-01', visit_zero_date: '2026-01-15',
+    visit_dates: ['2026-02-01', '2026-03-01'] };
+  const visits = [
+    { record_id: 'one', lot_code: '17', cycle_date: '2026-01-01', visit_number: 1, visit_date: '2026-02-01' },
+    { record_id: 'historical', lot_code: '17', visit_date: '2026-01-14' }
+  ];
+  const result = helpers.evaluateLotFollowup(plan, visits, '2026-02-02');
+  assert.deepEqual(Array.from(result.slots, slot => [slot.number, slot.visit_date]), [
+    [0, '2026-01-14'], [1, '2026-02-01'], [2, null]
+  ]);
+  const pending = helpers.buildLotWeeklyVisitItems([plan], [], {}, '2026-01-01');
+  assert.deepEqual(Array.from(pending, item => item.visitNumber), [0, 1, 2]);
+});
+
 test('counts distinct saved Malezas captures from the cycle date and never fulfills early', () => {
   const plan = {
     lot_code: '0000103',

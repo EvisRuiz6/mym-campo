@@ -3402,8 +3402,8 @@ function parseLotFollowupRows(rows) {
     return match ? { number: Number(match[1]), index } : null;
   }).filter(Boolean).sort((a, b) => a.number - b.number);
   if (!visitColumns.length) return { plans: [], errors: ['Agrega por lo menos una columna VISITA 1, VISITA 2, etc.'] };
-  if (visitColumns[0].number !== 1 || visitColumns.some((visit, index) => index > 0 && visit.number !== visitColumns[index - 1].number + 1)) {
-    return { plans: [], errors: ['Las columnas de visitas deben estar numeradas en orden desde VISITA 1.'] };
+  if (![0, 1].includes(visitColumns[0].number) || visitColumns.some((visit, index) => index > 0 && visit.number !== visitColumns[index - 1].number + 1)) {
+    return { plans: [], errors: ['Las columnas de visitas deben estar numeradas en orden desde VISITA 0 o VISITA 1.'] };
   }
   const errors = [];
   const plans = [];
@@ -3423,7 +3423,9 @@ function parseLotFollowupRows(rows) {
     for (const visitColumn of visitColumns) {
       const value = excelDateToIso(row[visitColumn.index]);
       if (value === null) errors.push('Fila ' + rowNumber + ': VISITA ' + visitColumn.number + ' no contiene una fecha válida.');
-      else if (!value) emptyVisitSeen = true;
+      else if (!value) {
+        if (visitColumn.number !== 0) emptyVisitSeen = true;
+      }
       else {
         if (emptyVisitSeen) errors.push('Fila ' + rowNumber + ': completa las visitas en orden; falta una fecha anterior a VISITA ' + visitColumn.number + '.');
         visitDates.push({ number: visitColumn.number, date: value });
@@ -3450,7 +3452,8 @@ function parseLotFollowupRows(rows) {
       finca: String(row[column('FINCA')] == null ? '' : row[column('FINCA')]).trim(),
       crop_state: String(row[column('ESTADO')] == null ? '' : row[column('ESTADO')]).trim(),
       responsible: String(row[column('RESPONSABLE')] == null ? '' : row[column('RESPONSABLE')]).trim(),
-      visit_dates: visitDates.map(visit => visit.date)
+      visit_dates: visitDates.filter(visit => visit.number > 0).map(visit => visit.date),
+      ...(visitColumns[0].number === 0 ? { visit_zero_date: visitDates.find(visit => visit.number === 0)?.date || null } : {})
     });
   }
   if (!plans.length && !errors.length) errors.push('No se encontraron filas de lotes para importar.');
@@ -3460,7 +3463,10 @@ function evaluateLotFollowup(plan, visits, today) {
   const lotCode = normalizeVisitMapLotCode(plan && plan.lot_code);
   const cycleDate = String(plan && plan.cycle_date || '').slice(0, 10);
   const scheduledDates = (Array.isArray(plan && plan.visit_dates) ? plan.visit_dates : [])
-    .map(value => String(value || '').slice(0, 10)).filter(value => excelDateToIso(value) === value).sort();
+    .map((value, index) => ({ number: index + 1, date: String(value || '').slice(0, 10) }))
+    .filter(value => excelDateToIso(value.date) === value.date);
+  const zeroDate = String(plan && plan.visit_zero_date || '').slice(0, 10);
+  if (excelDateToIso(zeroDate) === zeroDate && zeroDate) scheduledDates.unshift({ number: 0, date: zeroDate });
   const uniqueVisits = new Map();
   (Array.isArray(visits) ? visits : []).forEach((visit, index) => {
     if (normalizeVisitMapLotCode(visit && visit.lot_code) !== lotCode) return;
@@ -3487,8 +3493,9 @@ function evaluateLotFollowup(plan, visits, today) {
       continue;
     }
     const number = Number(visit.visit_number);
-    if (Number.isInteger(number) && number >= 1 && number <= requiredCount && !assignedVisits[number - 1]) {
-      assignedVisits[number - 1] = visit;
+    const index = scheduledDates.findIndex(slot => slot.number === number);
+    if (Number.isInteger(number) && index >= 0 && !assignedVisits[index]) {
+      assignedVisits[index] = visit;
     }
   }
   for (const visit of historicalVisits) {
@@ -3496,10 +3503,11 @@ function evaluateLotFollowup(plan, visits, today) {
     if (index < 0) break;
     assignedVisits[index] = visit;
   }
-  const slots = scheduledDates.map((dueDate, index) => {
+  const slots = scheduledDates.map((scheduled, index) => {
     const actual = assignedVisits[index];
+    const dueDate = scheduled.date;
     return {
-      number: index + 1,
+      number: scheduled.number,
       due_date: dueDate,
       visit_date: actual && actual.visit_date,
       pending_sync: !!(actual && actual.pending_sync),
@@ -4843,7 +4851,7 @@ function renderLotWeeklySchedule() {
 async function fetchAllLotFollowupPlans() {
   const plans = [];
   for (let offset = 0, page; ; offset += 1000) {
-    page = await cloudRequest('lot_visit_plans?select=lot_code,cycle_date,crop_state,responsible,visit_dates,updated_at&order=lot_code.asc&limit=1000&offset=' + offset);
+    page = await cloudRequest('lot_visit_plans?select=lot_code,cycle_date,crop_state,responsible,visit_zero_date,visit_dates,updated_at&order=lot_code.asc&limit=1000&offset=' + offset);
     if (!Array.isArray(page)) throw new Error('Supabase devolvió una lista de planes no válida.');
     plans.push(...page);
     if (page.length < 1000) return plans;
@@ -5070,7 +5078,7 @@ async function openWeeklyCapture(button, reviewGroup) {
     if (visits.some(visit => {
       const plan = state.lotFollowupPlans.find(item => item.lot_code === visit.lotCode);
       return !plan || plan.cycle_date !== visit.cycleDate ||
-        plan.visit_dates[visit.visitNumber - 1] !== visit.scheduledDate;
+        (visit.visitNumber === 0 ? plan.visit_zero_date : plan.visit_dates[visit.visitNumber - 1]) !== visit.scheduledDate;
     })) {
       throw new Error('El plan de una visita cambió. Descarga los datos pendientes y revísalos con el administrador.');
     }
@@ -5409,6 +5417,7 @@ function editLotFollowup(lotCode) {
   $('#lot-followup-cycle-date').value = String(plan.cycle_date || '').slice(0, 10);
   $('#lot-followup-state').value = plan.crop_state || '';
   $('#lot-followup-responsible').value = plan.responsible || '';
+  $('#lot-followup-date-zero').value = plan.visit_zero_date || '';
   $('#lot-followup-form-title').textContent = 'Editar plan · lote ' + plan.lot_code;
   $('#lot-followup-save').textContent = 'Guardar cambios';
   $('#lot-followup-cancel-edit').hidden = false;
@@ -5433,6 +5442,8 @@ async function saveLotFollowup(event) {
     throw new Error('El lote no existe en el catálogo o no está autorizado para tu cuenta.');
   }
   const visitDates = [];
+  const visitZeroDate = excelDateToIso($('#lot-followup-date-zero').value);
+  if (visitZeroDate === null) throw new Error('La fecha de VISITA 0 no es válida.');
   let emptyVisitSeen = false;
   for (const input of $$('[data-lot-followup-date]', $('#lot-followup-date-inputs'))) {
     const date = excelDateToIso(input.value);
@@ -5440,7 +5451,10 @@ async function saveLotFollowup(event) {
     if (emptyVisitSeen) throw new Error('Completa las fechas de visita en orden; no dejes espacios entre visitas.');
     visitDates.push(date);
   }
-  if (visitDates.length > 5) throw new Error('El ciclo admite como máximo cinco visitas programadas.');
+  if (visitDates.length + (visitZeroDate ? 1 : 0) > 5) throw new Error('El ciclo admite como máximo cinco visitas programadas.');
+  if (visitZeroDate && (visitZeroDate < cycleDate || (visitDates.length && visitZeroDate >= visitDates[0]))) {
+    throw new Error('VISITA 0 debe ser posterior o igual al inicio del ciclo y anterior a VISITA 1.');
+  }
   for (let index = 0; index < visitDates.length; index++) {
     if (visitDates[index] < cycleDate) throw new Error('Las fechas de visita no pueden ser anteriores a la fecha de siembra o corte.');
     if (index && visitDates[index] <= visitDates[index - 1]) throw new Error('Las fechas de visita deben ser únicas y estar en orden cronológico.');
@@ -5450,6 +5464,7 @@ async function saveLotFollowup(event) {
     cycle_date: cycleDate,
     crop_state: $('#lot-followup-state').value.trim(),
     responsible: $('#lot-followup-responsible').value.trim(),
+    visit_zero_date: visitZeroDate || null,
     visit_dates: visitDates,
     updated_at: new Date().toISOString()
   };
@@ -5503,6 +5518,15 @@ async function importLotFollowupWorkbook(file) {
     if (plan.finca && authorizedLot.finca && normalizeLotFarmLabel(plan.finca) !== normalizeLotFarmLabel(authorizedLot.finca)) {
       issues.push('La finca de la fila del lote ' + plan.lot_code + ' no coincide con el catálogo.');
     }
+    if (!Object.prototype.hasOwnProperty.call(plan, 'visit_zero_date')) {
+      const previous = state.lotFollowupPlans.find(item => item.lot_code === plan.lot_code);
+      plan.visit_zero_date = previous && previous.cycle_date === plan.cycle_date ? previous.visit_zero_date || null : null;
+    }
+    if (plan.visit_zero_date && (plan.visit_dates.length >= 5 ||
+      plan.visit_zero_date < plan.cycle_date ||
+      (plan.visit_dates.length && plan.visit_zero_date >= plan.visit_dates[0]))) {
+      issues.push('El plan del lote ' + plan.lot_code + ' no es compatible con su VISITA 0 existente.');
+    }
   }
   if (issues.length) throw new Error(issues.slice(0, 8).join(' · ') + (issues.length > 8 ? ' · y ' + (issues.length - 8) + ' error(es) más.' : ''));
   const existingLots = new Set(state.lotFollowupPlans.map(plan => plan.lot_code));
@@ -5519,6 +5543,7 @@ async function importLotFollowupWorkbook(file) {
       cycle_date: plan.cycle_date,
       crop_state: plan.crop_state,
       responsible: plan.responsible,
+      visit_zero_date: plan.visit_zero_date || null,
       visit_dates: plan.visit_dates,
       updated_at: new Date().toISOString()
     }))
@@ -5531,6 +5556,7 @@ async function importLotFollowupWorkbook(file) {
       savedPlan.cycle_date !== plan.cycle_date ||
       (savedPlan.crop_state || '') !== plan.crop_state ||
       (savedPlan.responsible || '') !== plan.responsible ||
+      (savedPlan.visit_zero_date || null) !== (plan.visit_zero_date || null) ||
       JSON.stringify(savedPlan.visit_dates || []) !== JSON.stringify(plan.visit_dates);
   });
   if (unconfirmed.length) {

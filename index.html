@@ -157,7 +157,7 @@
         <section id="page-registros" class="page" hidden>
           <p class="eyebrow">REGISTROS COMPARTIDOS</p><h1>Registros</h1><p class="subtitle">Cada usuario ve sus capturas; administradores y coordinadores pueden consultar las del equipo.</p>
           <p class="record-query-hint">Selecciona “Ver datos” para consultar la información completa de una captura guardada o sincronizada.</p>
-          <div class="record-toolbar"><label class="search-field">⌕ <input id="record-search" type="search" placeholder="Buscar por finca, actividad o responsable" aria-label="Buscar registros"></label><button class="secondary-button" data-goto="gestionar" type="button">Administrar capturas</button><button id="open-visit-map" class="secondary-button" type="button" hidden>Mapa de muestreos</button><button id="export-all" class="secondary-button" type="button">Exportar JSON</button></div>
+          <div class="record-toolbar"><label class="search-field">⌕ <input id="record-search" type="search" placeholder="Buscar por finca, actividad o responsable" aria-label="Buscar registros"></label><button class="secondary-button" data-goto="gestionar" type="button">Administrar capturas</button><button id="open-visit-map" class="secondary-button" type="button" hidden>Mapa de muestreos</button><button id="open-malezas-report" class="secondary-button" type="button" hidden>PDF acumulado de Malezas</button><button id="export-all" class="secondary-button" type="button">Exportar JSON</button></div>
           <div id="all-records" class="record-list"></div>
         </section>
 
@@ -439,12 +439,38 @@
         <form method="dialog" class="dialog-actions"><button class="secondary-button" type="submit">Cerrar</button></form>
       </div>
     </dialog>
+    <dialog id="malezas-summary-dialog" class="record-detail-dialog flight-report-dialog" aria-labelledby="malezas-summary-title">
+      <div class="record-detail-card">
+        <div class="record-detail-heading">
+          <div><p class="eyebrow">MALEZAS · RESUMEN ACUMULADO</p><h2 id="malezas-summary-title">Visitas por lote</h2></div>
+          <form method="dialog"><button class="record-detail-close" type="submit" aria-label="Cerrar resumen de Malezas">×</button></form>
+        </div>
+        <p id="malezas-summary-status" class="record-detail-summary" role="status" aria-live="polite"></p>
+        <div id="malezas-summary-filters" class="flight-report-filters">
+          <div class="field"><label class="field-label" for="malezas-summary-from">Desde</label><input id="malezas-summary-from" class="text-input" type="date"></div>
+          <div class="field"><label class="field-label" for="malezas-summary-to">Hasta</label><input id="malezas-summary-to" class="text-input" type="date"></div>
+          <div class="field"><label class="field-label" for="malezas-summary-farm">Finca</label><select id="malezas-summary-farm" class="select-input"><option value="">Todas las fincas</option></select></div>
+          <div class="field"><label class="field-label" for="malezas-summary-lot">Lote</label><select id="malezas-summary-lot" class="select-input"><option value="">Todos los lotes</option></select></div>
+        </div>
+        <label><input id="malezas-summary-photos" type="checkbox"> Incluir fotografías en el PDF</label>
+        <div class="flight-report-toolbar">
+          <p id="malezas-summary-count" class="flight-report-summary"></p>
+          <div class="flight-report-actions"><button id="malezas-summary-refresh" class="secondary-button" type="button">Actualizar vista</button><button id="malezas-summary-pdf" class="primary-button" type="button">Generar PDF acumulado</button></div>
+        </div>
+        <div class="flight-report-table-wrap"><table class="flight-report-table">
+          <thead><tr><th scope="col">Finca</th><th scope="col">Lote</th><th scope="col">Visitas</th><th scope="col">Última visita</th></tr></thead>
+          <tbody id="malezas-summary-rows"></tbody>
+        </table></div>
+        <p id="malezas-summary-note" class="field-hint" role="status" aria-live="polite"></p>
+        <form method="dialog" class="dialog-actions"><button class="secondary-button" type="submit">Cerrar</button></form>
+      </div>
+    </dialog>
     <nav class="mobile-nav" aria-label="Navegación móvil"><button data-page="inicio" class="active"><span aria-hidden="true">⌂</span>Inicio</button><button data-page="capturar"><span aria-hidden="true">＋</span>Capturar</button><button data-page="pendientes"><span aria-hidden="true">◷</span>Pendientes</button><button data-page="registros"><span aria-hidden="true">▤</span>Registros</button><button id="mobile-menu-toggle" type="button" aria-controls="workspace-menu" aria-expanded="false"><span aria-hidden="true">☰</span>Menú</button></nav>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </div>
   <script src="config.js"></script>
   <script src="vendor/exceljs-4.4.0.min.js"></script>
   <script src="excel-export.js?v=3"></script>
-  <script src="app.js?v=71"></script>
+  <script src="app.js?v=72"></script>
 </body>
 </html>

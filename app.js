@@ -3811,6 +3811,78 @@ function malezasReportRows(record) {
     };
   });
 }
+function malezasSummaryData(records, filters) {
+  const from = filters.from || '';
+  const to = filters.to || '';
+  const invalidDateRange = (from && flightReportDate(from) !== from) ||
+    (to && flightReportDate(to) !== to) || (from && to && from > to);
+  const rows = [];
+  let missingDateExcluded = 0;
+  for (const record of records) {
+    if (!record || record.tipo !== 'malezas') continue;
+    const data = record.datos || {};
+    const farm = String(data.FINCA || data.finca || '').trim();
+    for (const detail of malezasReportRows(record)) {
+      const date = flightReportDate(detail.date.slice(0, 10));
+      if (filters.farm && farm !== filters.farm) continue;
+      if (filters.lot && detail.lotCode !== filters.lot) continue;
+      if ((from || to) && !date) { missingDateExcluded++; continue; }
+      if (invalidDateRange || (from && date < from) || (to && date > to)) continue;
+      rows.push({ ...detail, date, farm, recordId: record.id,
+        owner: record.ownerName || record.ownerUsername || data.RESPONSABLE || data.responsable || '',
+        status: record.pendingConflict ? 'Conflicto por revisar' : recordStatus(record) });
+    }
+  }
+  rows.sort((a, b) => a.farm.localeCompare(b.farm, 'es') ||
+    a.lotCode.localeCompare(b.lotCode, 'es') || a.date.localeCompare(b.date) ||
+    String(a.recordId).localeCompare(String(b.recordId)));
+  const groups = new Map();
+  for (const row of rows) {
+    const key = JSON.stringify([row.farm, row.lotCode]);
+    if (!groups.has(key)) groups.set(key, { farm: row.farm, lotCode: row.lotCode, ids: new Set(), lastDate: '' });
+    const group = groups.get(key);
+    group.ids.add(row.recordId);
+    if (row.date > group.lastDate) group.lastDate = row.date;
+  }
+  return { rows, groups: [...groups.values()].map(group => ({
+    farm: group.farm, lotCode: group.lotCode, visits: group.ids.size, lastDate: group.lastDate
+  })), invalidDateRange: !!invalidDateRange, missingDateExcluded };
+}
+function malezasSummaryDocument(report, filters, includePhotos, sourceNote) {
+  const summary = report.groups.map(group => '<tr><td>' + esc(group.farm || 'Sin finca') +
+    '</td><td>' + esc(group.lotCode || 'Sin identificar') + '</td><td>' + group.visits +
+    '</td><td>' + esc(group.lastDate ? formatDate(group.lastDate) : 'Sin fecha') + '</td></tr>').join('');
+  const details = report.rows.map(row => {
+    const photos = includePhotos && row.images.length
+      ? '<div class="photos">' + row.images.map(image => '<figure><img src="' + esc(image.dataUrl) +
+        '" alt="' + esc(image.name || 'Fotografía de la visita') + '"><figcaption>' +
+        esc(image.name || 'Fotografía') + '</figcaption></figure>').join('') + '</div>' : '';
+    return '<section class="visit"><h3>' + esc(row.farm || 'Sin finca') + ' · Lote ' +
+      esc(row.lotCode || 'Sin identificar') + '</h3><p>' +
+      esc(row.date ? formatDate(row.date) : 'Sin fecha') + ' · ' + esc(row.owner || 'Sin responsable') +
+      ' · ' + esc(row.status) + '</p><p>Labor: ' + esc(row.labor || 'Sin dato') +
+      ' · Control: ' + esc(row.controlPercent == null ? 'Sin dato' : formatVisitMapControlPercent(row.controlPercent)) +
+      ' · Cobertura: ' + esc(row.coveragePercent == null ? 'Sin dato' : formatVisitMapControlPercent(row.coveragePercent)) +
+      (row.catorcena ? ' · Catorcena: ' + esc(row.catorcena) : '') + '</p>' +
+      (row.observations ? '<p>Observaciones: ' + esc(row.observations) + '</p>' : '') + photos + '</section>';
+  }).join('');
+  return '<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Malezas-acumulado-' +
+    esc(localDate()) + '</title><style>*{box-sizing:border-box}body{font:10px Arial,sans-serif;color:#182720}' +
+    'h1{color:#174b38;font-size:20px}h2{border-bottom:1px solid #174b38;margin-top:18px}' +
+    'table{width:100%;border-collapse:collapse}th,td{text-align:left;border-bottom:1px solid #ddd;padding:6px}' +
+    'thead{display:table-header-group}.visit{border:1px solid #dce5de;padding:8px;margin:8px 0}' +
+    '.visit h3{margin:0;color:#174b38}.visit p{margin:5px 0;overflow-wrap:anywhere}' +
+    '.photos{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.photos figure{margin:0;break-inside:avoid}' +
+    '.photos img{width:100%;height:62mm;object-fit:contain}.photos figcaption{overflow-wrap:anywhere}' +
+    '@page{size:letter portrait;margin:10mm}</style></head><body><h1>Resumen acumulado de Malezas</h1><p>' +
+    esc((filters.from || 'Inicio') + ' a ' + (filters.to || 'Sin límite')) + ' · Finca: ' +
+    esc(filters.farm || 'Todas') + ' · Lote: ' + esc(filters.lot || 'Todos') + '</p><p>' +
+    esc(sourceNote) + ' Las visitas en cola o con conflicto aún no están confirmadas.</p>' +
+    (report.missingDateExcluded ? '<p>' + report.missingDateExcluded + ' detalle(s) sin fecha válida excluidos del rango.</p>' : '') +
+    '<h2>Resumen por lote</h2><table><thead><tr><th>Finca</th><th>Lote</th><th>Visitas</th><th>Última visita</th></tr></thead><tbody>' +
+    (summary || '<tr><td colspan="4">No hay visitas con estos filtros.</td></tr>') + '</tbody></table>' +
+    '<h2>Detalle de visitas</h2>' + (details || '<p>No hay visitas con estos filtros.</p>') + '</body></html>';
+}
 function formatVisitMapControlPercent(percent) {
   return Number(percent.toFixed(2)).toString() + '%';
 }
@@ -5572,6 +5644,7 @@ function renderHome() {
   $('#active-user').textContent = state.user.displayName;
   $('#active-role').textContent = roleName(state.user.role);
   $('#open-visit-map').hidden = !canReviewLotVisits();
+  $('#open-malezas-report').hidden = !userCanOpenModule('malezas');
   $$('.admin-nav').forEach(group => { group.hidden = !canViewAllRecords(); });
   $('[data-page="usuarios"]').hidden = !isActiveAdmin();
   $$('[data-admin-only]').forEach(element => { element.hidden = !isActiveAdmin(); });
@@ -5843,6 +5916,7 @@ function handleCloudError(error) {
   if (state.user) toast(error.message || 'No se pudo conectar con el espacio compartido.');
 }
 async function startSession(user, session) {
+  resetMalezasSummary();
   resetFlightVariation();
   resetClimateChart();
   resetExcelExport();
@@ -5902,6 +5976,7 @@ async function endSession() {
   if (mapDialog.open) mapDialog.close();
   const flightReportDialog = $('#flight-report-dialog');
   if (flightReportDialog.open) flightReportDialog.close();
+  resetMalezasSummary();
   resetFlightReportView();
   $('#visit-map-stage').innerHTML = '';
   state.acceptingInvite = false;
@@ -6504,6 +6579,138 @@ $('#pending-logout').addEventListener('click', endSession);
 $('#record-search').addEventListener('input', refreshLists);
 $('#manage-record-search').addEventListener('input', refreshLists);
 $('#open-visit-map').addEventListener('click', openVisitMap);
+let malezasSummary = { records: [], user: null, source: '', sequence: 0 };
+function resetMalezasSummary() {
+  malezasSummary = { records: [], user: null, source: '', sequence: malezasSummary.sequence + 1 };
+  const dialog = $('#malezas-summary-dialog');
+  if (dialog.open) dialog.close();
+  $('#malezas-summary-rows').innerHTML = '';
+  $('#malezas-summary-note').textContent = '';
+}
+function malezasSummaryFilters() {
+  return { from: $('#malezas-summary-from').value, to: $('#malezas-summary-to').value,
+    farm: $('#malezas-summary-farm').value, lot: $('#malezas-summary-lot').value };
+}
+function updateMalezasSummaryOptions() {
+  const rows = malezasSummaryData(malezasSummary.records, {}).rows;
+  for (const [id, key, label] of [
+    ['malezas-summary-farm', 'farm', 'Todas las fincas'],
+    ['malezas-summary-lot', 'lotCode', 'Todos los lotes']
+  ]) {
+    const select = $('#' + id);
+    const previous = select.value;
+    const values = [...new Set(rows.map(row => row[key]).filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b, 'es'));
+    select.innerHTML = '<option value="">' + esc(label) + '</option>' +
+      values.map(value => '<option value="' + esc(value) + '">' + esc(value) + '</option>').join('');
+    select.value = values.includes(previous) ? previous : '';
+  }
+}
+function renderMalezasSummary() {
+  const report = malezasSummaryData(malezasSummary.records, malezasSummaryFilters());
+  $('#malezas-summary-pdf').disabled = report.invalidDateRange || !malezasSummary.user || !report.rows.length;
+  $('#malezas-summary-status').textContent = report.invalidDateRange
+    ? 'Revisa el rango de fechas: la fecha inicial debe ser anterior o igual a la fecha final.'
+    : report.rows.length ? 'Resumen de las visitas que cumplen los filtros.' : 'No hay visitas que coincidan con los filtros.';
+  $('#malezas-summary-count').textContent = report.groups.length + ' lote(s) · ' + report.rows.length + ' detalle(s)';
+  $('#malezas-summary-rows').innerHTML = report.groups.map(group => '<tr><td>' +
+    esc(group.farm || 'Sin finca') + '</td><td>' + esc(group.lotCode || 'Sin identificar') +
+    '</td><td>' + group.visits + '</td><td>' +
+    esc(group.lastDate ? formatDate(group.lastDate) : 'Sin fecha') + '</td></tr>').join('') ||
+    '<tr><td colspan="4">No hay visitas con estos filtros.</td></tr>';
+  $('#malezas-summary-note').textContent = malezasSummary.source +
+    (report.missingDateExcluded ? ' Se excluyeron ' + report.missingDateExcluded + ' detalle(s) sin fecha válida.' : '');
+}
+async function loadMalezasSummary() {
+  if (!state.user || !userCanOpenModule('malezas')) throw new Error('Tu perfil no tiene acceso a Malezas.');
+  const user = { ...state.user, allowedZones: [...(state.user.allowedZones || [])] };
+  const sequence = ++malezasSummary.sequence;
+  malezasSummary.records = [];
+  malezasSummary.user = null;
+  malezasSummary.source = '';
+  renderMalezasSummary();
+  $('#malezas-summary-pdf').disabled = true;
+  $('#malezas-summary-refresh').disabled = true;
+  $('#malezas-summary-status').textContent = 'Cargando visitas autorizadas…';
+  try {
+    const [local, groups] = await Promise.all([getRecords(), getWeeklyVisitOutbox()]);
+    if (sequence !== malezasSummary.sequence || !sameOfflineScope(user)) return;
+    const queued = groups.filter(canAccessWeeklyOutbox).flatMap(group => group.captures.map(capture => ({
+      id: capture.record_id, tipo: 'malezas', datos: capture.datos, createdAt: group.createdAt,
+      ownerId: user.id, ownerUsername: user.username, ownerName: user.displayName,
+      syncStatus: 'pending', pendingConflict: group.status === 'conflict'
+    })));
+    const queuedIds = new Set(queued.map(record => record.id));
+    const available = local.filter(record => !queuedIds.has(record.id)).concat(queued).filter(recordHasLotAccess);
+    let remote = [];
+    let offline = !navigator.onLine || !state.configured;
+    let source = 'Sin conexión: se muestran solo las visitas disponibles en este dispositivo; pueden estar desactualizadas.';
+    if (!offline) {
+      try {
+        const ownerFilter = ['admin', 'coordinador'].includes(user.role) ? '' : '&owner_id=eq.' + encodeURIComponent(user.id);
+        for (let offset = 0, page; ; offset += 100) {
+          page = await cloudRequest('field_records?tipo=eq.malezas' + ownerFilter +
+            '&select=id,owner_id,tipo,created_at,schema_version,datos,review_status,reviewed_by,reviewed_at,review_note,profiles!field_records_owner_id_fkey(username,display_name)&order=created_at.desc,id.asc&limit=100&offset=' + offset);
+          if (!Array.isArray(page)) throw new Error('El servidor devolvió una lista de capturas no válida.');
+          remote.push(...page.map(mapCloudRecord));
+          if (page.length < 100) break;
+        }
+        source = 'Incluye visitas compartidas autorizadas y pendientes de este dispositivo.';
+      } catch (error) {
+        if (!error.connectionFailure) throw error;
+        console.error('No se pudieron cargar las visitas compartidas para el reporte.', error);
+        remote = [];
+        offline = true;
+        source = 'No se pudieron cargar las visitas compartidas: ' + (error.message || 'error del servidor') +
+          '. Se muestran solo datos disponibles en este dispositivo, posiblemente desactualizados.';
+      }
+    }
+    if (sequence !== malezasSummary.sequence || !sameOfflineScope(user)) return;
+    malezasSummary.records = mergeScopedReportRecords(remote.filter(recordHasLotAccess), available, user, offline, 'malezas');
+    malezasSummary.user = user;
+    malezasSummary.source = source;
+    updateMalezasSummaryOptions();
+    renderMalezasSummary();
+  } finally {
+    if (sequence === malezasSummary.sequence) $('#malezas-summary-refresh').disabled = false;
+  }
+}
+async function openMalezasSummary() {
+  if (!state.user || !userCanOpenModule('malezas')) throw new Error('Tu perfil no tiene acceso a Malezas.');
+  const dialog = $('#malezas-summary-dialog');
+  if (typeof dialog.showModal !== 'function') throw new Error('Este navegador no permite abrir el resumen de Malezas.');
+  if (!dialog.open) dialog.showModal();
+  await loadMalezasSummary();
+}
+async function printMalezasSummary() {
+  if (!malezasSummary.user || !sameOfflineScope(malezasSummary.user) || !userCanOpenModule('malezas')) {
+    throw new Error('Cambió la cuenta o sus permisos; vuelve a cargar el resumen.');
+  }
+  const user = malezasSummary.user;
+  const filters = malezasSummaryFilters();
+  const report = malezasSummaryData(malezasSummary.records, filters);
+  if (report.invalidDateRange || !report.rows.length) { renderMalezasSummary(); return; }
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) throw new Error('Permite las ventanas emergentes para generar el PDF.');
+  try {
+    printWindow.document.open();
+    printWindow.document.write(malezasSummaryDocument(report, filters, $('#malezas-summary-photos').checked, malezasSummary.source));
+    printWindow.document.close();
+    await waitForReportImages(printWindow);
+    if (!sameOfflineScope(user)) throw new Error('Cambió la cuenta o sus permisos durante la generación del reporte.');
+    printWindow.focus();
+    printWindow.print();
+  } catch (error) { printWindow.close(); throw error; }
+}
+function handleMalezasSummaryError(error) {
+  console.error('No se pudo completar el resumen de Malezas.', error);
+  $('#malezas-summary-status').textContent = error.message || 'No se pudo cargar el resumen de Malezas.';
+  toast(error.message || 'No se pudo completar el resumen de Malezas.');
+}
+$('#open-malezas-report').addEventListener('click', () => { void openMalezasSummary().catch(handleMalezasSummaryError); });
+$('#malezas-summary-refresh').addEventListener('click', () => { void loadMalezasSummary().catch(handleMalezasSummaryError); });
+$('#malezas-summary-filters').addEventListener('change', renderMalezasSummary);
+$('#malezas-summary-pdf').addEventListener('click', () => { void printMalezasSummary().catch(handleMalezasSummaryError); });
 $('#visit-map-stage').addEventListener('click', event => {
   const lot = event.target.closest('[data-visit-lot]');
   if (lot) selectVisitMapLot(lot.dataset.visitLot);

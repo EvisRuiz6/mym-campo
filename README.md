@@ -28,6 +28,8 @@ En **Registros**, las capturas EPP incluyen **Generar PDF**. La opción abre la 
 
 Las capturas de Malezas también incluyen **Generar PDF**. El reporte por captura muestra un mapa de los lotes con geometría disponible, coloreados por % CONTROL, además de control, cobertura y las imágenes de cada lote. El % COBERTURA se calcula automáticamente como `100 - % CONTROL` y queda vacío cuando no hay un control válido; los mapas requieren los límites protegidos de Supabase, salvo que ya se hayan cargado en la sesión.
 
+En **Registros → PDF acumulado de Malezas**, las cuentas con acceso al módulo pueden filtrar por fechas, finca y lote y generar un informe con resumen por lote y detalle de visitas; las fotografías son opcionales. Se consultan las capturas compartidas autorizadas y se incluyen las capturas pendientes o en conflicto de este dispositivo, identificadas por su estado. Sin conexión o ante un fallo de conexión se informa y se usan únicamente los datos locales disponibles, que pueden estar desactualizados; otros errores se muestran sin presentar el reporte como actualizado. Las fechas se filtran por detalle; los detalles sin fecha válida quedan fuera cuando se aplica un rango. La impresión permite guardar el informe como PDF y no modifica las capturas.
+
 **La sincronización requiere Supabase configurado.** Crea el proyecto, aplica las migraciones y proporciona su URL y clave pública. La aplicación se publica como archivos estáticos; el servidor local incluido solo sirve esos archivos.
 
 ## Configuración

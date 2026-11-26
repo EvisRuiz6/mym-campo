@@ -33,6 +33,21 @@ const buildReport = runInNewContext(
     localDate: () => '2026-03-15'
   }
 );
+const summaryStart = appSource.indexOf('function malezasSummaryData(');
+const summaryEnd = appSource.indexOf('\nfunction formatVisitMapControlPercent(', summaryStart);
+assert.ok(summaryStart >= 0 && summaryEnd > summaryStart);
+const summary = runInNewContext(
+  appSource.slice(summaryStart, summaryEnd) + '\n({ malezasSummaryData, malezasSummaryDocument })',
+  {
+    esc: escapeHtml,
+    malezasReportRows: helpers.malezasReportRows,
+    flightReportDate: value => /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : '',
+    formatDate: value => value,
+    formatVisitMapControlPercent: helpers.formatVisitMapControlPercent,
+    localDate: () => '2026-11-26',
+    recordStatus: record => record.syncStatus === 'pending' ? 'En cola' : 'Pendiente de revisión'
+  }
+);
 
 test('builds Malezas report rows with derived coverage and captured images', () => {
   const record = {
@@ -158,4 +173,80 @@ test('builds a printable report with the sampled map, derived metrics, and photo
   assert.match(html, /src="data:image\/jpeg;base64,Zm9v"/);
   assert.match(html, /&lt;script&gt;no ejecutar&lt;\/script&gt;/);
   assert.doesNotMatch(html, /<script>no ejecutar<\/script>/);
+});
+
+test('filters details by inclusive date, farm and lot and counts distinct captures per lot', () => {
+  const records = [
+    { id: 'a', tipo: 'malezas', syncStatus: 'synced', datos: { FINCA: 'Norte', subregistros: { malezas_detalle: [
+      { LOTE: '17', FECHA: '2026-11-01' }, { LOTE: '17', FECHA: '2026-11-01' },
+      { LOTE: '18', FECHA: '2026-11-03' }
+    ] } } },
+    { id: 'b', tipo: 'malezas', syncStatus: 'pending', datos: { FINCA: 'Norte', subregistros: { malezas_detalle: [
+      { LOTE: '17', FECHA: '2026-11-30' }, { LOTE: '17' }
+    ] } } },
+    { id: 'c', tipo: 'malezas', datos: { FINCA: 'Sur', LOTE: '17', FECHA: '2026-11-15' } }
+  ];
+  const report = summary.malezasSummaryData(records, { from: '2026-11-01', to: '2026-11-30', farm: 'Norte', lot: '0000017' });
+  assert.equal(report.rows.length, 3);
+  assert.equal(report.groups.length, 1);
+  assert.equal(report.groups[0].visits, 2);
+  assert.equal(report.groups[0].lastDate, '2026-11-30');
+  assert.equal(report.missingDateExcluded, 1);
+  assert.equal(summary.malezasSummaryData(records, { from: '2026-12-01', to: '2026-11-01' }).invalidDateRange, true);
+});
+
+test('includes optional photos and marks pending and conflict visits in escaped PDF output', () => {
+  const records = [{ id: 'a', tipo: 'malezas', syncStatus: 'pending', pendingConflict: true, ownerName: 'Ana',
+    datos: { FINCA: 'Norte', subregistros: { malezas_detalle: [{
+      LOTE: '17', FECHA: '2026-11-01', '% CONTROL': '72.5', OBSERVACIONES: '<script>mal</script>',
+      IMAGEN: { name: 'foto.jpg', dataUrl: 'data:image/jpeg;base64,Zm9v' }
+    }] } } }];
+  const report = summary.malezasSummaryData(records, {});
+  const withoutPhotos = summary.malezasSummaryDocument(report, {}, false, 'Datos locales');
+  const withPhotos = summary.malezasSummaryDocument(report, {}, true, 'Datos locales');
+  assert.match(withoutPhotos, /Conflicto por revisar/);
+  assert.match(withoutPhotos, /72\.5%/);
+  assert.match(withoutPhotos, /27\.5%/);
+  assert.match(withoutPhotos, /&lt;script&gt;mal&lt;\/script&gt;/);
+  assert.doesNotMatch(withoutPhotos, /data:image/);
+  assert.match(withPhotos, /src="data:image\/jpeg;base64,Zm9v"/);
+});
+
+test('uses only authorized local captures and queued visits when the server fails', async () => {
+  const start = appSource.indexOf('let malezasSummary = ');
+  const end = appSource.indexOf("\n$('#visit-map-stage').addEventListener", start);
+  const mergeStart = appSource.indexOf('function mergeScopedReportRecords(');
+  const mergeEnd = appSource.indexOf('\nfunction resetFlightVariation(', mergeStart);
+  assert.ok(start >= 0 && end > start && mergeStart >= 0 && mergeEnd > mergeStart);
+  const user = { id: 'one', username: 'uno', role: 'supervisor', status: 'active', allowedZones: ['1'] };
+  const elements = new Map();
+  const $ = selector => {
+    if (!elements.has(selector)) elements.set(selector, { value: '', innerHTML: '', textContent: '', disabled: false, addEventListener() {} });
+    return elements.get(selector);
+  };
+  const own = { id: 'own', tipo: 'malezas', ownerId: 'one', syncStatus: 'synced', datos: { FINCA: 'Norte', LOTE: '17', FECHA: '2026-11-01' } };
+  const other = { ...own, id: 'other', ownerId: 'two' };
+  const group = { userId: 'one', status: 'conflict', captures: [{ record_id: 'queued',
+    datos: { FINCA: 'Norte', LOTE: '18', FECHA: '2026-11-02' } }] };
+  const context = {
+    state: { user, configured: true }, navigator: { onLine: true }, $, esc: escapeHtml,
+    userCanOpenModule: () => true, sameOfflineScope: expected => expected.id === context.state.user?.id,
+    getRecords: async () => [own, other], getWeeklyVisitOutbox: async () => [group],
+    canAccessWeeklyOutbox: item => item.userId === context.state.user.id,
+    recordHasLotAccess: () => true,
+    flightRecordBelongsToUser: (record, current) => record.ownerId === current.id,
+    cloudRequest: async () => { throw Object.assign(new Error('servidor no disponible'), { connectionFailure: true }); },
+    malezasSummaryData: summary.malezasSummaryData, formatDate: value => value,
+    console: { error() {} }, toast() {}
+  };
+  const harness = runInNewContext(appSource.slice(mergeStart, mergeEnd) + '\n' +
+    appSource.slice(start, end) + '\n({ loadMalezasSummary, get: () => malezasSummary })', context);
+  await harness.loadMalezasSummary();
+  assert.deepEqual(Array.from(harness.get().records, row => row.id), ['own', 'queued']);
+  assert.equal(harness.get().records[1].pendingConflict, true);
+  assert.match(harness.get().source, /No se pudieron cargar las visitas compartidas/);
+  context.cloudRequest = async () => { throw Object.assign(new Error('Sin permisos'), { httpStatus: 403 }); };
+  await assert.rejects(harness.loadMalezasSummary(), /Sin permisos/);
+  assert.equal(harness.get().records.length, 0);
+  assert.equal($('#malezas-summary-pdf').disabled, true);
 });

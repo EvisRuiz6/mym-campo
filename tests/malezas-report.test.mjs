@@ -41,6 +41,7 @@ const summary = runInNewContext(
   {
     esc: escapeHtml,
     malezasReportRows: helpers.malezasReportRows,
+    malezasReportMapSvg: helpers.malezasReportMapSvg,
     flightReportDate: value => /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : '',
     formatDate: value => value,
     formatVisitMapControlPercent: helpers.formatVisitMapControlPercent,
@@ -202,14 +203,78 @@ test('includes optional photos and marks pending and conflict visits in escaped 
       IMAGEN: { name: 'foto.jpg', dataUrl: 'data:image/jpeg;base64,Zm9v' }
     }] } } }];
   const report = summary.malezasSummaryData(records, {});
-  const withoutPhotos = summary.malezasSummaryDocument(report, {}, false, 'Datos locales');
-  const withPhotos = summary.malezasSummaryDocument(report, {}, true, 'Datos locales');
+  const withoutPhotos = summary.malezasSummaryDocument(report, {}, false, 'Datos locales', [], '');
+  const withPhotos = summary.malezasSummaryDocument(report, {}, true, 'Datos locales', [], '');
   assert.match(withoutPhotos, /Conflicto por revisar/);
   assert.match(withoutPhotos, /72\.5%/);
   assert.match(withoutPhotos, /27\.5%/);
   assert.match(withoutPhotos, /&lt;script&gt;mal&lt;\/script&gt;/);
   assert.doesNotMatch(withoutPhotos, /data:image/);
   assert.match(withPhotos, /src="data:image\/jpeg;base64,Zm9v"/);
+});
+
+test('maps filtered lots with their latest included control and reports missing geometry', () => {
+  const records = [
+    { id: 'a', tipo: 'malezas', datos: { FINCA: 'Norte', subregistros: { malezas_detalle: [
+      { LOTE: '17', FECHA: '2026-11-01', '% CONTROL': '60' },
+      { LOTE: '18', FECHA: '2026-11-01', '% CONTROL': '90' },
+      { LOTE: '19', FECHA: '2026-11-01', '% CONTROL': '50' }
+    ] } } },
+    { id: 'b', tipo: 'malezas', datos: { FINCA: 'Norte', LOTE: '17', FECHA: '2026-11-15', '% CONTROL': '80' } }
+  ];
+  const boundary = lot => ({ lot_code: lot, zone: '1', geometry: {
+    crs: 'EPSG:32615', rings: [[[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]]]
+  } });
+  const report = summary.malezasSummaryData(records, { from: '2026-11-01', to: '2026-11-30' });
+  const html = summary.malezasSummaryDocument(report, {}, false, 'Fuente', [boundary('17'), boundary('18'), boundary('99')], 'Límites guardados');
+  assert.match(html, /Mapa de lotes incluidos/);
+  assert.match(html, /class="malezas-map-lot is-visited control-medium-high"/);
+  assert.match(html, /class="malezas-map-lot is-visited control-high"/);
+  assert.match(html, /Sin geometría disponible para: 0000019/);
+  assert.match(html, /Límites guardados/);
+  assert.doesNotMatch(html, />0000099<\/text>/);
+
+  const filtered = summary.malezasSummaryData(records, { lot: '0000017', to: '2026-11-02' });
+  const filteredHtml = summary.malezasSummaryDocument(filtered, { lot: '0000017' }, false, 'Fuente', [boundary('17'), boundary('18')], '');
+  assert.match(filteredHtml, /class="malezas-map-lot is-visited control-low"/);
+  assert.doesNotMatch(filteredHtml, />0000018<\/text>/);
+});
+
+test('loads authorized boundaries before printing and stops if the account changes', async () => {
+  const start = appSource.indexOf('async function printMalezasSummary()');
+  const end = appSource.indexOf('\nfunction handleMalezasSummaryError(', start);
+  assert.ok(start >= 0 && end > start);
+  const user = { id: 'one' };
+  let current = user;
+  let changed = false;
+  let written = '';
+  let printed = false;
+  let closed = false;
+  const printWindow = { document: { open() {}, write(html) { written = html; }, close() {} },
+    focus() {}, print() { printed = true; }, close() { closed = true; } };
+  const context = {
+    malezasSummary: { user, records: [], source: 'Fuente' },
+    sameOfflineScope: expected => current === expected,
+    userCanOpenModule: () => true, malezasSummaryFilters: () => ({}),
+    malezasSummaryData: () => ({ invalidDateRange: false, rows: [{}] }),
+    $: () => ({ checked: false }), window: { open: () => printWindow },
+    loadBoundariesForReport: async () => {
+      if (changed) current = { id: 'two' };
+      return { boundaries: [{ zone: '1' }, { zone: '2' }], savedAt: null };
+    },
+    userCanAccessZone: zone => zone === '1',
+    malezasSummaryDocument: (_report, _filters, _photos, _source, boundaries) => JSON.stringify(boundaries),
+    waitForReportImages: async () => {}, renderMalezasSummary() {}
+  };
+  const print = runInNewContext(appSource.slice(start, end) + '\nprintMalezasSummary', context);
+  await print();
+  assert.equal(written, '[{"zone":"1"}]');
+  assert.equal(printed, true);
+  changed = true;
+  printed = false;
+  await assert.rejects(print(), /Cambió la cuenta o sus permisos/);
+  assert.equal(printed, false);
+  assert.equal(closed, true);
 });
 
 test('uses only authorized local captures and queued visits when the server fails', async () => {

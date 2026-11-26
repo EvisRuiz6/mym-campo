@@ -3848,7 +3848,11 @@ function malezasSummaryData(records, filters) {
     farm: group.farm, lotCode: group.lotCode, visits: group.ids.size, lastDate: group.lastDate
   })), invalidDateRange: !!invalidDateRange, missingDateExcluded };
 }
-function malezasSummaryDocument(report, filters, includePhotos, sourceNote) {
+function malezasSummaryDocument(report, filters, includePhotos, sourceNote, boundaries, boundaryNote) {
+  const map = malezasReportMapSvg(boundaries, report.rows);
+  const missingLots = [...new Set(report.rows.map(row => row.lotCode)
+    .filter(code => code && !map.lotCodes.has(code)))];
+  const unidentified = report.rows.filter(row => !row.lotCode).length;
   const summary = report.groups.map(group => '<tr><td>' + esc(group.farm || 'Sin finca') +
     '</td><td>' + esc(group.lotCode || 'Sin identificar') + '</td><td>' + group.visits +
     '</td><td>' + esc(group.lastDate ? formatDate(group.lastDate) : 'Sin fecha') + '</td></tr>').join('');
@@ -3874,11 +3878,31 @@ function malezasSummaryDocument(report, filters, includePhotos, sourceNote) {
     '.visit h3{margin:0;color:#174b38}.visit p{margin:5px 0;overflow-wrap:anywhere}' +
     '.photos{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.photos figure{margin:0;break-inside:avoid}' +
     '.photos img{width:100%;height:62mm;object-fit:contain}.photos figcaption{overflow-wrap:anywhere}' +
-    '@page{size:letter portrait;margin:10mm}</style></head><body><h1>Resumen acumulado de Malezas</h1><p>' +
+    '.malezas-report-map{margin:0;border:1px solid #dce5de;padding:5px;break-inside:avoid}' +
+    '.malezas-report-map-svg{display:block;width:100%;max-height:112mm}' +
+    '.malezas-map-lot{stroke-width:1.2;vector-effect:non-scaling-stroke}' +
+    '.malezas-map-lot.control-missing{fill:#b9c9d2;stroke:#657b85}' +
+    '.malezas-map-lot.control-low{fill:#de9b91;stroke:#9f493f}' +
+    '.malezas-map-lot.control-medium-low{fill:#e8b37d;stroke:#9b672e}' +
+    '.malezas-map-lot.control-medium-high{fill:#e4d27f;stroke:#82702b}' +
+    '.malezas-map-lot.control-high{fill:#93bf96;stroke:#3e7048}' +
+    '.malezas-map-label{fill:#182720;stroke:#fff;stroke-width:3px;paint-order:stroke;font-size:14px;font-weight:700;text-anchor:middle;dominant-baseline:central}' +
+    '.map-legend{display:flex;flex-wrap:wrap;gap:8px;list-style:none;padding:0}' +
+    '.map-legend i{display:inline-block;width:9px;height:9px;border:1px solid #777}' +
+    '@page{size:letter portrait;margin:10mm}@media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}' +
+    '</style></head><body><h1>Resumen acumulado de Malezas</h1><p>' +
     esc((filters.from || 'Inicio') + ' a ' + (filters.to || 'Sin límite')) + ' · Finca: ' +
     esc(filters.farm || 'Todas') + ' · Lote: ' + esc(filters.lot || 'Todos') + '</p><p>' +
     esc(sourceNote) + ' Las visitas en cola o con conflicto aún no están confirmadas.</p>' +
     (report.missingDateExcluded ? '<p>' + report.missingDateExcluded + ' detalle(s) sin fecha válida excluidos del rango.</p>' : '') +
+    '<h2>Mapa de lotes incluidos</h2><p>El color representa el porcentaje de control de la visita más reciente incluida en el informe.</p>' +
+    '<figure class="malezas-report-map">' + map.markup + '</figure>' +
+    (missingLots.length ? '<p>Sin geometría disponible para: ' + esc(missingLots.join(', ')) + '.</p>' : '') +
+    (unidentified ? '<p>' + unidentified + ' detalle(s) sin lote identificado no se pueden ubicar en el mapa.</p>' : '') +
+    (boundaryNote ? '<p>' + esc(boundaryNote) + '</p>' : '') +
+    '<ul class="map-legend"><li><i style="background:#b9c9d2"></i> Sin %</li>' +
+    '<li><i style="background:#de9b91"></i> Menos de 70%</li><li><i style="background:#e8b37d"></i> 70% a menos de 75%</li>' +
+    '<li><i style="background:#e4d27f"></i> 75% a 85%</li><li><i style="background:#93bf96"></i> Más de 85%</li></ul>' +
     '<h2>Resumen por lote</h2><table><thead><tr><th>Finca</th><th>Lote</th><th>Visitas</th><th>Última visita</th></tr></thead><tbody>' +
     (summary || '<tr><td colspan="4">No hay visitas con estos filtros.</td></tr>') + '</tbody></table>' +
     '<h2>Detalle de visitas</h2>' + (details || '<p>No hay visitas con estos filtros.</p>') + '</body></html>';
@@ -3999,7 +4023,7 @@ function malezasReportMapSvg(boundaries, rows) {
   const lotCodes = new Set(lots.map(lot => lot.lot_code));
   if (!lots.length) {
     return {
-      markup: '<div class="malezas-report-map-empty">No se encontraron geometrías para los lotes de esta captura.</div>',
+      markup: '<div class="malezas-report-map-empty">No se encontraron geometrías para los lotes incluidos.</div>',
       lotCodes
     };
   }
@@ -6690,11 +6714,18 @@ async function printMalezasSummary() {
   const filters = malezasSummaryFilters();
   const report = malezasSummaryData(malezasSummary.records, filters);
   if (report.invalidDateRange || !report.rows.length) { renderMalezasSummary(); return; }
+  const includePhotos = $('#malezas-summary-photos').checked;
+  const sourceNote = malezasSummary.source;
   const printWindow = window.open('', '_blank');
   if (!printWindow) throw new Error('Permite las ventanas emergentes para generar el PDF.');
   try {
+    const snapshot = await loadBoundariesForReport();
+    if (!sameOfflineScope(user)) throw new Error('Cambió la cuenta o sus permisos durante la generación del reporte.');
+    const boundaries = snapshot.boundaries.filter(boundary => userCanAccessZone(boundary.zone));
+    const boundaryNote = snapshot.savedAt
+      ? 'Límites guardados el ' + offlineSnapshotDate(snapshot) + '; pueden estar desactualizados.' : '';
     printWindow.document.open();
-    printWindow.document.write(malezasSummaryDocument(report, filters, $('#malezas-summary-photos').checked, malezasSummary.source));
+    printWindow.document.write(malezasSummaryDocument(report, filters, includePhotos, sourceNote, boundaries, boundaryNote));
     printWindow.document.close();
     await waitForReportImages(printWindow);
     if (!sameOfflineScope(user)) throw new Error('Cambió la cuenta o sus permisos durante la generación del reporte.');
